@@ -22,3 +22,6 @@ class CommentResponse(BaseModel):
     replies: List["CommentResponse"] = []
     created_at: datetime
     updated_at: datetime
+    
+    class Config:
+        from_attributes = True

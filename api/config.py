@@ -6,7 +6,7 @@ class Settings(BaseSettings):
     DB_URL: str 
     JWT_SECRET: str 
     JWT_ALGORITHM: str 
-    JWT_ACCESS_EXPIRY: int = 3600
+    JWT_ACCESS_EXPIRY: int = 43200
     JWT_REFRESH_EXPIRY: int = 172800
     REDIS_HOST: str
     REDIS_PORT: int = 6379
