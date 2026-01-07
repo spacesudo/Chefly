@@ -1,10 +1,11 @@
-from sqlmodel import Field, SQLModel, Relationship, Column
-from sqlalchemy import UniqueConstraint, text, ForeignKey
-from typing import Optional, List
 from datetime import datetime
-from uuid import UUID, uuid4
 from enum import Enum
+from typing import List, Optional
+from uuid import UUID, uuid4
+
+from sqlalchemy import ForeignKey, UniqueConstraint, text
 import sqlalchemy.dialects.postgresql as pg
+from sqlmodel import Column, Field, Relationship, SQLModel
 
 class PostType(str, Enum):
     RECIPE = "recipe"
@@ -14,6 +15,27 @@ class PostType(str, Enum):
 class VoteType(str, Enum):
     UPVOTE = "upvote"
     DOWNVOTE = "downvote"
+
+class Follows(SQLModel, table=True):
+    __tablename__ = "follows"
+    __table_args__ = (UniqueConstraint("follower_id", "following_id", name="unique_follower_following"),)
+    id: UUID = Field(
+        sa_column=Column(pg.UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")),
+        default_factory=uuid4
+    )
+    follower_id: UUID = Field(
+        sa_column=Column(pg.UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True)
+    )
+    follower: "User" = Relationship(back_populates="following", sa_relationship_kwargs={"foreign_keys": "Follows.follower_id"})
+    following_id: UUID = Field(
+        sa_column=Column(pg.UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True)
+    )
+    following: "User" = Relationship(back_populates="followers", sa_relationship_kwargs={"foreign_keys": "Follows.following_id"})
+    
+    created_at: datetime = Field(
+        sa_column=Column(pg.TIMESTAMP(timezone=True), nullable=False, server_default=text("CURRENT_TIMESTAMP"), index=True),
+        default_factory=datetime.now
+    )    
     
 class Posts(SQLModel, table=True):
     __tablename__ = "posts"
@@ -67,6 +89,17 @@ class User(SQLModel, table=True):
     posts: List["Posts"] = Relationship(back_populates="author")
     votes: List["Votes"] = Relationship(back_populates="user")
     comments: List["Comments"] = Relationship(back_populates="user")
+    following: List["Follows"] = Relationship(back_populates="follower",  link_model=Follows, sa_relationship_kwargs={
+            "primaryjoin": "User.id == Follows.follower_id",
+            "secondaryjoin": "User.id == Follows.following_id"
+        })
+    followers: List["Follows"] = Relationship(back_populates="following",  link_model=Follows, sa_relationship_kwargs={
+            "primaryjoin": "User.id == Follows.following_id",
+            "secondaryjoin": "User.id == Follows.follower_id"
+        })
+    
+    following_count: int = Field(sa_column=Column(pg.INTEGER, nullable=True, server_default="0", index=True), default=0)
+    followers_count: int = Field(sa_column=Column(pg.INTEGER, nullable=True, server_default="0", index=True), default=0)
     
 class Votes(SQLModel, table=True):
     __tablename__ = "votes"
@@ -124,3 +157,5 @@ class Comments(SQLModel, table=True):
         sa_column=Column(pg.TIMESTAMP(timezone=True), nullable=False, server_default=text("CURRENT_TIMESTAMP"), index=True),
         default_factory=datetime.now
     )
+    
+
