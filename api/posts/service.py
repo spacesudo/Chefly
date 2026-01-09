@@ -1,10 +1,12 @@
-from api.posts.schemas import PostCreate, PostEdit
-from api.db.models import Posts
-from sqlmodel.ext.asyncio.session import AsyncSession
-from fastapi import HTTPException, status
-from uuid import UUID
-from sqlmodel import select
 from typing import List
+from uuid import UUID
+
+from fastapi import HTTPException, status
+from sqlmodel import select
+from sqlmodel.ext.asyncio.session import AsyncSession
+
+from api.db.models import Posts
+from api.posts.schemas import PostCreate, PostEdit
 
 class PostService:
     async def create_post(self, post_data: PostCreate, session: AsyncSession) -> Posts:
