@@ -1,37 +1,37 @@
-# ChefLy 🍳
+# ChefLy
 
 A modern, asynchronous social media platform API for cooking recipe sharing, voting, and community engagement. Built with FastAPI, PostgreSQL, and SQLModel.
 
 ## Features
 
-### 🔐 Authentication & Authorization
+### Authentication & Authorization
 - User registration and login
 - JWT-based authentication (access & refresh tokens)
 - Token blacklisting with Redis
 - Password hashing with bcrypt
 - Secure token validation
 
-### 📝 Posts
+### Posts
 - Create, read, update, and delete posts
 - Multiple content types: Recipes, Tips, and Other
 - Post metadata tracking (upvotes, downvotes, comment counts)
 - Author-based access control
 
-### 💬 Comments
+### Comments
 - Nested comment replies (unlimited depth)
 - Create, edit, and delete comments
 - Soft deletion support
 - Recursive reply tree structure
 - Comment threading
 
-### 👍 Voting System
+### Voting System
 - Upvote and downvote posts
 - One vote per user per post (unique constraint)
 - Vote type toggling (switch between upvote/downvote)
 - Real-time vote count updates
 - Vote history tracking
 
-### 👥 Social Features
+### Social Features
 - Follow/unfollow users
 - View followers and following lists
 - Follow status checking
