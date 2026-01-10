@@ -106,7 +106,7 @@ async def get_followers_usernames(
     session: AsyncSession = Depends(get_session)
 ):
     user_uuid = UUID(user_id)
-    followers_usernames = await follow_service.get_followers_usernames(user_uuid, session)
+    followers_usernames = await follow_service.get_follower_usernames(user_uuid, session)
     return {"followers_usernames": followers_usernames}
 
 @router.get("/users/{user_id}/following-usernames")
