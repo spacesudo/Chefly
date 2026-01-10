@@ -1,10 +1,14 @@
+from uuid import UUID
+
+from fastapi import HTTPException, status
+from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
+
+from api.db.main import get_session
+from api.db.models import User
+
 from .schemas import UserCreate, UserLogin
 from .utils import hash_password, verify_password
-from api.db.models import User
-from api.db.main import get_session
-from sqlmodel import select
-from fastapi import HTTPException, status
 
 class UserService:
     
@@ -20,6 +24,18 @@ class UserService:
             raise
         except Exception as e:
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Error getting user by email: {e}")
+        
+    async def get_user_by_id(self, user_id: UUID, session: AsyncSession) -> User | None:
+        try:
+            result = await session.execute(select(User).where(User.id == user_id))
+            user = result.scalar_one_or_none()
+            if not user:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+            return user
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Error getting user by id: {e}")
         
     async def user_exists(self, email: str, session: AsyncSession) -> bool:
         try:
