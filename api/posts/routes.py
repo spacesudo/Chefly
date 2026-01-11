@@ -33,6 +33,25 @@ async def get_all_posts(session: AsyncSession = Depends(get_session), token_deta
     posts = await post_service.get_all_posts(session)
     return posts
 
+@router.get("/following-feed")
+async def get_following_feed(session: AsyncSession = Depends(get_session), token_details: dict = Depends(AccessTokenBearer())):
+    user_id_str = token_details["user"]["user_id"]
+    if not user_id_str:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
+    
+    try:
+        user_id = UUID(user_id_str)
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid user ID format")
+    
+    posts = await post_service.following_feed(user_id, session)
+    return posts
+
+@router.get("/feed")
+async def get_feed(session: AsyncSession = Depends(get_session)):
+    posts = await post_service.feed(session)
+    return posts
+
 @router.get("/{post_id}")
 async def get_post(post_id: str, session: AsyncSession = Depends(get_session), token_details: dict = Depends(AccessTokenBearer())):
     post = await post_service.get_post_by_id(post_id, session)
@@ -76,3 +95,4 @@ async def edit_post(post_id: str, post_data: PostEdit, session: AsyncSession = D
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You are not the author of this post")
     post = await post_service.edit_post(post_id, post_data, session)
     return post
+

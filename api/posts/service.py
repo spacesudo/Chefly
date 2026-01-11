@@ -6,9 +6,13 @@ from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from api.db.models import Posts
+from api.follows.service import FollowService
 from api.posts.schemas import PostCreate, PostEdit
 
 class PostService:
+    
+    follow_service = FollowService()
+    
     async def create_post(self, post_data: PostCreate, session: AsyncSession) -> Posts:
         try:
             new_post = Posts(**post_data.model_dump())
@@ -68,3 +72,36 @@ class PostService:
         except Exception as e:
             await session.rollback()
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Error editing post: {e}")
+        
+    async def following_feed(self, user_id: UUID, session: AsyncSession, limit: int = 20, offset: int = 0) -> List[Posts]:
+        try:
+            followers = await self.follow_service.get_following(user_id, session)
+            following_ids = [following.id for following in followers]
+            
+            result = await session.execute(
+                select(Posts)
+                .where(Posts.author_id.in_(following_ids))
+                .order_by(Posts.created_at.desc())
+                .limit(limit)
+                .offset(offset) 
+            )
+            posts = result.scalars().all()
+            return list(posts)
+
+        except Exception as e:
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Error getting following feed: {e}")
+        
+    async def feed(self, session: AsyncSession, limit: int = 20, offset: int = 0) -> List[Posts]:
+        try:
+            result = await session.execute(
+                select(Posts)
+                .order_by(Posts.created_at.desc())
+                .order_by(Posts.upvote_count.desc())
+                .limit(limit)
+                .offset(offset)
+            )
+            posts = result.scalars().all()
+            return list(posts)
+        
+        except Exception as e:
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Error getting feed: {e}")
