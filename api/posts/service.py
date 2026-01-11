@@ -86,7 +86,8 @@ class PostService:
                 .offset(offset) 
             )
             posts = result.scalars().all()
-            return list(posts)
+            
+            return list(posts) if posts else await self.feed(session, limit, offset)
 
         except Exception as e:
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Error getting following feed: {e}")
