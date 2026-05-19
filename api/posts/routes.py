@@ -34,7 +34,7 @@ async def get_all_posts(session: AsyncSession = Depends(get_session), token_deta
     return posts
 
 @router.get("/following-feed")
-async def get_following_feed(session: AsyncSession = Depends(get_session), token_details: dict = Depends(AccessTokenBearer())):
+async def get_following_feed(limit: int = 20, offset: int = 0, session: AsyncSession = Depends(get_session), token_details: dict = Depends(AccessTokenBearer())):
     user_id_str = token_details["user"]["user_id"]
     if not user_id_str:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
@@ -44,12 +44,12 @@ async def get_following_feed(session: AsyncSession = Depends(get_session), token
     except (ValueError, TypeError):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid user ID format")
     
-    posts = await post_service.following_feed(user_id, session)
+    posts = await post_service.following_feed(user_id, session, limit, offset)
     return posts
 
 @router.get("/feed")
-async def get_feed(session: AsyncSession = Depends(get_session)):
-    posts = await post_service.feed(session)
+async def get_feed(limit: int = 20, offset: int = 0, session: AsyncSession = Depends(get_session)):
+    posts = await post_service.feed(session, limit, offset)
     return posts
 
 @router.get("/{post_id}")
