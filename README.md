@@ -16,6 +16,9 @@ A modern, asynchronous social media platform API for cooking recipe sharing, vot
 - Multiple content types: Recipes, Tips, and Other
 - Post metadata tracking (upvotes, downvotes, comment counts)
 - Author-based access control
+- Chronological public feed (`GET /posts/feed`)
+- Following-only feed with fallback to the public feed (`GET /posts/following-feed`)
+- **FYP recommendation engine** (`api/posts/algorithm.py`) — interaction-weighted, Redis-backed personalized feed logic
 
 ### Comments
 - Nested comment replies (unlimited depth)
@@ -46,7 +49,7 @@ A modern, asynchronous social media platform API for cooking recipe sharing, vot
 - **Migrations**: Alembic (async support)
 - **Authentication**: JWT (PyJWT)
 - **Password Hashing**: bcrypt
-- **Caching**: Redis (for JWT blacklisting)
+- **Caching & ranking**: Redis (JWT blacklisting, FYP interaction scores, and post rankings)
 - **Validation**: Pydantic 2.12+
 - **Python**: 3.13+
 
@@ -55,7 +58,7 @@ A modern, asynchronous social media platform API for cooking recipe sharing, vot
 ### Prerequisites
 - Python 3.13+
 - PostgreSQL database
-- Redis server (for JWT blacklisting)
+- Redis server (JWT blacklisting and FYP recommendation data)
 - `uv` package manager (recommended) or `pip`
 
 ### Setup
@@ -115,6 +118,8 @@ Once the server is running, access the interactive API documentation:
 ### Posts (`/posts`)
 - `POST /posts/create` - Create a new post (authenticated)
 - `GET /posts/all` - Get all posts (authenticated)
+- `GET /posts/feed` - Public chronological feed sorted by recency and upvotes
+- `GET /posts/following-feed` - Posts from users you follow (authenticated; falls back to `/feed` if empty)
 - `GET /posts/{post_id}` - Get a specific post (authenticated)
 - `PUT /posts/{post_id}` - Update a post (authenticated, author only)
 - `DELETE /posts/{post_id}` - Delete a post (authenticated, author only)
@@ -142,6 +147,70 @@ Once the server is running, access the interactive API documentation:
 - `GET /follows/users/{user_id}/following-count` - Get following count (public)
 - `GET /follows/users/{user_id}/followers-usernames` - Get follower usernames (public)
 - `GET /follows/users/{user_id}/following-usernames` - Get following usernames (public)
+
+## FYP Recommendation Algorithm
+
+Personalized “For You” feed logic lives in `api/posts/algorithm.py`. It uses Redis as an ephemeral scoring layer on top of PostgreSQL for post retrieval.
+
+### How it works
+
+1. **Record interactions** — Call `record_interaction()` when a user upvotes, downvotes, comments, follows an author, etc. Each event applies a weighted score.
+2. **Cold start** — Users with no interaction history receive popular posts (highest `upvote_count` from PostgreSQL).
+3. **Personalized feed** — Users with history get:
+   - Unseen posts from **preferred authors** (ranked by cumulative interaction weight)
+   - Backfill from the **global post leaderboard** (`fyp:ranked_posts` in Redis)
+   - Fallback to popular posts if Redis/SQL return nothing
+
+### Interaction weights
+
+| Interaction type | Weight |
+|------------------|--------|
+| `upvotes`        | +1     |
+| `downvotes`      | -1     |
+| `comments`       | +5     |
+| `follows`        | +10    |
+| `unfollows`      | -10    |
+| `profile_view`   | +3     |
+| *(unknown)*      | +0.5   |
+
+### Redis keys
+
+| Key | Type | Purpose |
+|-----|------|---------|
+| `user:{user_id}:interactions` | Hash | Per-user post interaction scores (7-day TTL) |
+| `user:{user_id}:preferred_authors` | Sorted set | Authors the user engages with most (7-day TTL) |
+| `user:{user_id}:viewed_posts` | Set | Posts already surfaced to the user |
+| `fyp:ranked_posts` | Sorted set | Global post ranking by aggregate interaction score |
+
+### Programmatic usage
+
+```python
+from uuid import UUID
+from api.db.main import get_session
+from api.db.redis import redis_client
+from api.posts.algorithm import record_interaction, get_fyp_recommendations
+
+# After a vote, comment, follow, etc.
+await record_interaction(
+    redis=redis_client,
+    user_id=user_id,
+    post_id=post_id,
+    interaction_type="upvotes",  # or downvotes, comments, follows, ...
+    author_id=post.author_id,
+)
+
+# Fetch recommendations
+async for session in get_session():
+    posts = await get_fyp_recommendations(
+        redis=redis_client,
+        session=session,
+        user_id=user_id,
+        limit=20,
+        offset=0,
+    )
+```
+
+> **Note:** The FYP functions are implemented but not yet exposed as an HTTP route or automatically called from vote/comment/follow handlers. Wire `record_interaction` into those services and add a `GET /posts/fyp` endpoint to serve recommendations from the API.
 
 ## Database Models
 
@@ -191,13 +260,17 @@ chefly/
 │   │   ├── utils.py         # JWT & password utilities
 │   │   └── dependencies.py  # Token validation
 │   ├── posts/               # Posts module
+│   │   ├── routes.py        # Post & feed endpoints
+│   │   ├── service.py       # Post business logic
+│   │   ├── schemas.py       # Post Pydantic models
+│   │   └── algorithm.py     # FYP recommendation engine (Redis + SQL)
 │   ├── comments/            # Comments module
 │   ├── votes/               # Voting module
 │   ├── follows/             # Follow system module
 │   └── db/
 │       ├── main.py          # Database session management
 │       ├── models.py        # SQLModel database models
-│       └── redis.py         # Redis client
+│       └── redis.py         # Shared async Redis client (decode_responses=True)
 ├── migrations/              # Alembic migrations
 ├── main.py                  # Application entry point
 └── pyproject.toml           # Project dependencies
@@ -232,6 +305,7 @@ alembic downgrade -1
 - Password hashing with bcrypt (truncated to 72 bytes)
 - JWT token validation
 - Token blacklisting with Redis
+- Ephemeral FYP scores in Redis (TTL-backed; stores user/post UUIDs only)
 - Unique constraints on votes and follows
 - Author-based access control
 - Input validation with Pydantic
@@ -257,6 +331,7 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 
 ## Future Enhancements
 
+- [ ] Expose FYP feed as `GET /posts/fyp` and wire `record_interaction` into votes, comments, and follows
 - [ ] Recipe ingredient and instruction parsing
 - [ ] Image upload support
 - [ ] Search functionality
