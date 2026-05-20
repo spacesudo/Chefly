@@ -23,6 +23,10 @@ async def is_jwt_blacklisted(jti: str) -> bool:
     return await redis_client.get(jti) is not None
 
 
+async def get_redis() -> Redis:
+    return redis_client
+
+
 
 
 

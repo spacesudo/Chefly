@@ -1,5 +1,6 @@
 """Ephemeral Redis-backed FYP recommendations using interaction score weights."""
 
+import logging
 from typing import List
 from uuid import UUID
 
@@ -10,6 +11,8 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 
 from api.db.models import Posts
 from api.db.redis import redis_client
+
+logger = logging.getLogger(__name__)
 
 INTERACTIONS_TTL = 60 * 60 * 24 * 7
 
@@ -42,19 +45,22 @@ async def get_redis_client() -> Redis:
 async def record_interaction(
     redis: Redis,
     user_id: UUID,
-    post_id: UUID,
     interaction_type: str,
     author_id: UUID,
+    post_id: UUID | None = None,
+    *,
+    mark_viewed: bool = True,
 ):
     weight = SCORE_WEIGHT.get(interaction_type, 0.5)
+    interactions_key = _user_interactions_key(user_id)
 
-    await redis.hincrbyfloat(
-        _user_interactions_key(user_id),
-        str(post_id),
-        weight,
-    )
-
-    await redis.zincrby("fyp:ranked_posts", weight, str(post_id))
+    if post_id is not None:
+        await redis.hincrbyfloat(interactions_key, str(post_id), weight)
+        await redis.zincrby("fyp:ranked_posts", weight, str(post_id))
+        if mark_viewed:
+            await redis.sadd(_user_viewed_key(user_id), str(post_id))
+    else:
+        await redis.hincrbyfloat(interactions_key, f"author:{author_id}", weight)
 
     await redis.zincrby(
         _user_preferred_authors_key(user_id),
@@ -62,10 +68,29 @@ async def record_interaction(
         str(author_id),
     )
 
-    await redis.sadd(_user_viewed_key(user_id), str(post_id))
-
-    await redis.expire(_user_interactions_key(user_id), INTERACTIONS_TTL)
+    await redis.expire(interactions_key, INTERACTIONS_TTL)
     await redis.expire(_user_preferred_authors_key(user_id), INTERACTIONS_TTL)
+
+
+async def safe_record_interaction(
+    user_id: UUID,
+    interaction_type: str,
+    author_id: UUID,
+    post_id: UUID | None = None,
+    *,
+    mark_viewed: bool = True,
+) -> None:
+    try:
+        await record_interaction(
+            redis_client,
+            user_id=user_id,
+            interaction_type=interaction_type,
+            author_id=author_id,
+            post_id=post_id,
+            mark_viewed=mark_viewed,
+        )
+    except Exception:
+        logger.warning("Failed to record FYP interaction", exc_info=True)
 
 
 async def get_fyp_recommendations(

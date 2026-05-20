@@ -7,6 +7,7 @@ from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from api.db.models import Comments, Posts
+from api.posts.algorithm import safe_record_interaction
 from api.posts.service import PostService
 
 from .schemas import CommentCreate, CommentEdit, CommentResponse
@@ -23,7 +24,9 @@ class CommentService:
                     raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Parent comment not found")
                 if parent_comment.post_id != comment_data.post_id:
                     raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Parent comment does not belong to the same post")
-            post = await self.post_service.get_post_by_id(comment_data.post_id, session)
+            post = await self.post_service.get_post_by_id(
+                str(comment_data.post_id), session
+            )
             if post:
                 post.comment_count += 1
                 await session.commit()
@@ -33,6 +36,15 @@ class CommentService:
             session.add(new_comment)
             await session.commit()
             await session.refresh(new_comment)
+
+            if post:
+                await safe_record_interaction(
+                    user_id=new_comment.user_id,
+                    post_id=post.id,
+                    interaction_type="comments",
+                    author_id=post.author_id,
+                )
+
             return new_comment
         
         except Exception as e:

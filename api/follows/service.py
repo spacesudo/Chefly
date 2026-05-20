@@ -7,6 +7,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 
 from api.auth.service import UserService
 from api.db.models import Follows, User
+from api.posts.algorithm import safe_record_interaction
 
 class FollowService:
     
@@ -52,6 +53,13 @@ class FollowService:
             await session.refresh(new_follow)
             await session.refresh(follower_user)
             await session.refresh(following_user)
+
+            await safe_record_interaction(
+                user_id=follower_id,
+                interaction_type="follows",
+                author_id=following_id,
+            )
+
             return new_follow
         
         except HTTPException:
@@ -86,6 +94,12 @@ class FollowService:
                 
             await session.delete(existing_follow)
             await session.commit()
+
+            await safe_record_interaction(
+                user_id=follower_id,
+                interaction_type="unfollows",
+                author_id=following_id,
+            )
             
         except HTTPException:
             await session.rollback()

@@ -6,17 +6,29 @@ from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from api.db.models import Posts, Votes, VoteType
+from api.posts.algorithm import safe_record_interaction
 from api.posts.service import PostService
 
 from .schemas import VoteCreate, VoteResponse
 
+
 class VoteService:
     
     post_service = PostService()
+
+    async def _record_vote_interaction(
+        self, user_id: UUID, post: Posts, vote_type: VoteType
+    ) -> None:
+        interaction_type = "upvotes" if vote_type == VoteType.UPVOTE else "downvotes"
+        await safe_record_interaction(
+            user_id=user_id,
+            post_id=post.id,
+            interaction_type=interaction_type,
+            author_id=post.author_id,
+        )
     
     async def create_vote(self, vote_data: VoteCreate, session: AsyncSession) -> Votes:
         try:
-            # Check if vote already exists
             result = await session.execute(
                 select(Votes).where(
                     Votes.post_id == vote_data.post_id,
@@ -30,16 +42,12 @@ class VoteService:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Post not found")
             
             if existing_vote:
-                # Vote already exists - update it if vote type is different
                 if existing_vote.vote_type == vote_data.vote_type:
-                    # Same vote type - return existing vote (or raise error)
                     return existing_vote
                 
-                # Different vote type - update the vote
                 old_vote_type = existing_vote.vote_type
                 existing_vote.vote_type = vote_data.vote_type
                 
-                # Update post counts: remove old vote, add new vote
                 if old_vote_type == VoteType.UPVOTE:
                     post.upvote_count -= 1
                 else:
@@ -53,6 +61,9 @@ class VoteService:
                 await session.commit()
                 await session.refresh(existing_vote)
                 await session.refresh(post)
+                await self._record_vote_interaction(
+                    vote_data.user_id, post, vote_data.vote_type
+                )
                 return existing_vote
             else:
                 # Create new vote
@@ -68,6 +79,9 @@ class VoteService:
                 await session.commit()
                 await session.refresh(new_vote)
                 await session.refresh(post)
+                await self._record_vote_interaction(
+                    vote_data.user_id, post, vote_data.vote_type
+                )
                 return new_vote
                 
         except HTTPException:
@@ -100,6 +114,15 @@ class VoteService:
                         post.downvote_count -= 1
                     await session.commit()
                     await session.refresh(post)
+                    reverse_type = (
+                        "downvotes" if vote.vote_type == VoteType.UPVOTE else "upvotes"
+                    )
+                    await safe_record_interaction(
+                        user_id=vote.user_id,
+                        post_id=post.id,
+                        interaction_type=reverse_type,
+                        author_id=post.author_id,
+                    )
                 await session.delete(vote)
                 await session.commit()
         except Exception as e:

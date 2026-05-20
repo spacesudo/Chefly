@@ -120,6 +120,7 @@ Once the server is running, access the interactive API documentation:
 - `GET /posts/all` - Get all posts (authenticated)
 - `GET /posts/feed` - Public chronological feed sorted by recency and upvotes
 - `GET /posts/following-feed` - Posts from users you follow (authenticated; falls back to `/feed` if empty)
+- `GET /posts/fyp` - Personalized For You feed based on interaction history (authenticated)
 - `GET /posts/{post_id}` - Get a specific post (authenticated)
 - `PUT /posts/{post_id}` - Update a post (authenticated, author only)
 - `DELETE /posts/{post_id}` - Delete a post (authenticated, author only)
@@ -154,7 +155,7 @@ Personalized “For You” feed logic lives in `api/posts/algorithm.py`. It uses
 
 ### How it works
 
-1. **Record interactions** — Call `record_interaction()` when a user upvotes, downvotes, comments, follows an author, etc. Each event applies a weighted score.
+1. **Record interactions** — Votes, comments, and follows/unfollows automatically call `safe_record_interaction()` after a successful DB write. Each event applies a weighted score.
 2. **Cold start** — Users with no interaction history receive popular posts (highest `upvote_count` from PostgreSQL).
 3. **Personalized feed** — Users with history get:
    - Unseen posts from **preferred authors** (ranked by cumulative interaction weight)
@@ -188,11 +189,10 @@ Personalized “For You” feed logic lives in `api/posts/algorithm.py`. It uses
 from uuid import UUID
 from api.db.main import get_session
 from api.db.redis import redis_client
-from api.posts.algorithm import record_interaction, get_fyp_recommendations
+from api.posts.algorithm import safe_record_interaction, get_fyp_recommendations
 
-# After a vote, comment, follow, etc.
-await record_interaction(
-    redis=redis_client,
+# Manual interaction recording (services use safe_record_interaction automatically)
+await safe_record_interaction(
     user_id=user_id,
     post_id=post_id,
     interaction_type="upvotes",  # or downvotes, comments, follows, ...
@@ -210,7 +210,7 @@ async for session in get_session():
     )
 ```
 
-> **Note:** The FYP functions are implemented but not yet exposed as an HTTP route or automatically called from vote/comment/follow handlers. Wire `record_interaction` into those services and add a `GET /posts/fyp` endpoint to serve recommendations from the API.
+Interaction recording is best-effort: if Redis is unavailable, the API request still succeeds and a warning is logged.
 
 ## Database Models
 
@@ -331,7 +331,6 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 
 ## Future Enhancements
 
-- [ ] Expose FYP feed as `GET /posts/fyp` and wire `record_interaction` into votes, comments, and follows
 - [ ] Recipe ingredient and instruction parsing
 - [ ] Image upload support
 - [ ] Search functionality

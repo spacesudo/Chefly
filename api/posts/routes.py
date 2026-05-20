@@ -2,7 +2,9 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import JSONResponse
 from api.posts.schemas import PostCreate, PostEdit
 from api.posts.service import PostService
+from api.posts.algorithm import get_fyp_recommendations
 from api.db.main import get_session
+from api.db.redis import redis_client
 from sqlmodel.ext.asyncio.session import AsyncSession
 from api.auth.dependencies import AccessTokenBearer
 from logging import Logger
@@ -50,6 +52,31 @@ async def get_following_feed(limit: int = 20, offset: int = 0, session: AsyncSes
 @router.get("/feed")
 async def get_feed(limit: int = 20, offset: int = 0, session: AsyncSession = Depends(get_session)):
     posts = await post_service.feed(session, limit, offset)
+    return posts
+
+@router.get("/fyp")
+async def get_fyp_feed(
+    limit: int = 20,
+    offset: int = 0,
+    session: AsyncSession = Depends(get_session),
+    token_details: dict = Depends(AccessTokenBearer()),
+):
+    user_id_str = token_details["user"]["user_id"]
+    if not user_id_str:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
+
+    try:
+        user_id = UUID(user_id_str)
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid user ID format")
+
+    posts = await get_fyp_recommendations(
+        redis=redis_client,
+        session=session,
+        user_id=user_id,
+        limit=limit,
+        offset=offset,
+    )
     return posts
 
 @router.get("/{post_id}")
