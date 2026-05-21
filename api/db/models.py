@@ -62,6 +62,7 @@ class Posts(SQLModel, table=True):
     author: "User" = Relationship(back_populates="posts")
     votes: List["Votes"] = Relationship(back_populates="post")
     comments: List["Comments"] = Relationship(back_populates="post")
+    bookmarks: List["Bookmark"] = Relationship(back_populates="post")
     upvote_count: int = Field(sa_column=Column(pg.INTEGER, nullable=True, server_default="0", index=True), default=0)
     downvote_count: int = Field(sa_column=Column(pg.INTEGER, nullable=True, server_default="0", index=True), default=0)
     comment_count: int = Field(sa_column=Column(pg.INTEGER, nullable=True, server_default="0", index=True), default=0)
@@ -89,6 +90,7 @@ class User(SQLModel, table=True):
     posts: List["Posts"] = Relationship(back_populates="author")
     votes: List["Votes"] = Relationship(back_populates="user")
     comments: List["Comments"] = Relationship(back_populates="user")
+    bookmarks: List["Bookmark"] = Relationship(back_populates="user")
     following: List["Follows"] = Relationship(back_populates="follower",  link_model=Follows, sa_relationship_kwargs={
             "primaryjoin": "User.id == Follows.follower_id",
             "secondaryjoin": "User.id == Follows.following_id"
@@ -159,3 +161,22 @@ class Comments(SQLModel, table=True):
     )
     
 
+class Bookmark(SQLModel, table=True):
+    __tablename__ = "bookmarks"
+    __table_args__ = (UniqueConstraint("user_id", "post_id", name="unique_user_post_bookmark"),)
+    id: UUID = Field(
+        sa_column=Column(pg.UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")),
+        default_factory=uuid4,
+    )
+    post_id: UUID = Field(
+        sa_column=Column(pg.UUID(as_uuid=True), ForeignKey("posts.id"), nullable=False, index=True)
+    )
+    post: "Posts" = Relationship(back_populates="bookmarks")
+    user_id: UUID = Field(
+        sa_column=Column(pg.UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True)
+    )
+    user: "User" = Relationship(back_populates="bookmarks")
+    created_at: datetime = Field(
+        sa_column=Column(pg.TIMESTAMP(timezone=True), nullable=False, server_default=text("CURRENT_TIMESTAMP"), index=True),
+        default_factory=datetime.now,
+    )
