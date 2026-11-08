@@ -48,8 +48,7 @@ async def create_comment(comment_data: CommentCreate, session: AsyncSession = De
     except (ValueError, TypeError):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid user ID format")
     
-    if not comment_data.user_id:
-        comment_data.user_id = user_id
+    comment_data.user_id = user_id
         
     comment = await comment_service.create_comment(comment_data, session)
     return comment

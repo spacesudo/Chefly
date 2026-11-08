@@ -14,8 +14,6 @@ from api.communities.access import (
     get_membership,
 )
 from api.db.models import (
-    Bookmark,
-    Comments,
     Community,
     CommunityJoinRequest,
     CommunityMember,
@@ -23,9 +21,9 @@ from api.db.models import (
     JoinRequestStatus,
     Posts,
     User,
-    Votes,
 )
 from api.posts.schemas import PostCreate
+from api.posts.service import PostService
 
 from .schemas import (
     CommunityCreate,
@@ -51,6 +49,8 @@ async def _handle_errors(session: AsyncSession, action: str):
 
 class CommunityService:
 
+    post_service = PostService()
+
     async def _require_role(self, community_id: UUID, user_id: UUID, session: AsyncSession, roles: set[CommunityRole]) -> CommunityMember:
         member = await get_membership(community_id, user_id, session)
         if not member or member.role not in roles:
@@ -67,13 +67,6 @@ class CommunityService:
         session.add(member)
         community.members_count += 1
         return member
-
-    async def _delete_posts(self, post_ids, session: AsyncSession) -> None:
-        """Delete posts along with their votes, comments and bookmarks."""
-        await session.execute(delete(Votes).where(Votes.post_id.in_(post_ids)))
-        await session.execute(delete(Comments).where(Comments.post_id.in_(post_ids)))
-        await session.execute(delete(Bookmark).where(Bookmark.post_id.in_(post_ids)))
-        await session.execute(delete(Posts).where(Posts.id.in_(post_ids)))
 
     async def _usernames(self, user_ids: list[UUID], session: AsyncSession) -> dict[UUID, str]:
         if not user_ids:
@@ -138,7 +131,7 @@ class CommunityService:
         async with _handle_errors(session, "deleting community"):
             community = await get_community_or_404(community_id, session)
             await self._require_role(community_id, user_id, session, {CommunityRole.OWNER})
-            await self._delete_posts(select(Posts.id).where(Posts.community_id == community_id), session)
+            await self.post_service.delete_posts_with_dependents(select(Posts.id).where(Posts.community_id == community_id), session)
             await session.execute(delete(CommunityJoinRequest).where(CommunityJoinRequest.community_id == community_id))
             await session.execute(delete(CommunityMember).where(CommunityMember.community_id == community_id))
             await session.delete(community)
@@ -334,5 +327,5 @@ class CommunityService:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Post not found in this community")
             if post.author_id != user_id:
                 await self._require_role(community_id, user_id, session, MANAGERS)
-            await self._delete_posts(select(Posts.id).where(Posts.id == post_id), session)
+            await self.post_service.delete_posts_with_dependents([post_id], session)
             await session.commit()

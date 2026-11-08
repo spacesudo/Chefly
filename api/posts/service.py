@@ -2,11 +2,12 @@ from typing import List
 from uuid import UUID
 
 from fastapi import HTTPException, status
+from sqlalchemy import delete
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from api.communities.access import public_posts_filter, visible_posts_filter
-from api.db.models import Posts
+from api.db.models import Bookmark, Comments, Posts, Votes
 from api.follows.service import FollowService
 from api.posts.schemas import PostCreate, PostEdit
 
@@ -38,11 +39,18 @@ class PostService:
         except Exception as e:
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Error getting post by id: {e}")
         
+    async def delete_posts_with_dependents(self, post_ids, session: AsyncSession) -> None:
+        """Delete posts along with their votes, comments and bookmarks. Caller commits."""
+        await session.execute(delete(Votes).where(Votes.post_id.in_(post_ids)))
+        await session.execute(delete(Comments).where(Comments.post_id.in_(post_ids)))
+        await session.execute(delete(Bookmark).where(Bookmark.post_id.in_(post_ids)))
+        await session.execute(delete(Posts).where(Posts.id.in_(post_ids)))
+
     async def delete_post(self, post_id: str, session: AsyncSession) -> None:
         try:
             post = await self.get_post_by_id(post_id, session)
             if post:
-                await session.delete(post)
+                await self.delete_posts_with_dependents([post.id], session)
                 await session.commit()
         except HTTPException:
             raise

@@ -29,8 +29,7 @@ async def create_vote(vote_data: VoteCreate, session: AsyncSession = Depends(get
     except (ValueError, TypeError):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid user ID format")
     
-    if not vote_data.user_id:
-        vote_data.user_id = user_id
+    vote_data.user_id = user_id
         
     vote = await vote_service.create_vote(vote_data, session)
     return vote
