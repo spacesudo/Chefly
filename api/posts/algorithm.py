@@ -23,6 +23,8 @@ SCORE_WEIGHT = {
     "follows": 10,
     "unfollows" : -10,
     "profile_view" : 3,
+    "bookmarks": 7,
+    "unbookmarks": -7,
 }
 
 

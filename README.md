@@ -149,6 +149,12 @@ Once the server is running, access the interactive API documentation:
 - `GET /follows/users/{user_id}/followers-usernames` - Get follower usernames (public)
 - `GET /follows/users/{user_id}/following-usernames` - Get following usernames (public)
 
+### Bookmarks (`/bookmarks`)
+- `GET /bookmarks/` - Get your bookmarked posts, newest first (authenticated; `limit`/`offset`)
+- `POST /bookmarks/posts/{post_id}` - Bookmark a post (authenticated; idempotent)
+- `DELETE /bookmarks/posts/{post_id}` - Remove a bookmark (authenticated)
+- `GET /bookmarks/posts/{post_id}/status` - Check whether you bookmarked a post (authenticated)
+
 ## FYP Recommendation Algorithm
 
 Personalized “For You” feed logic lives in `api/posts/algorithm.py`. It uses Redis as an ephemeral scoring layer on top of PostgreSQL for post retrieval.
@@ -172,6 +178,8 @@ Personalized “For You” feed logic lives in `api/posts/algorithm.py`. It uses
 | `follows`        | +10    |
 | `unfollows`      | -10    |
 | `profile_view`   | +3     |
+| `bookmarks`      | +7     |
+| `unbookmarks`    | -7     |
 | *(unknown)*      | +0.5   |
 
 ### Redis keys
@@ -336,7 +344,8 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 - [ ] Search functionality
 - [ ] Notifications system
 - [ ] User profiles and bio
-- [ ] Recipe collections/bookmarks
+- [x] Bookmarks
+- [ ] Recipe collections
 - [ ] Rate limiting
 - [ ] Email verification
 
