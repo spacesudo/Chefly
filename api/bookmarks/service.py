@@ -5,6 +5,7 @@ from fastapi import HTTPException, status
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
+from api.communities.access import ensure_can_view_post, visible_posts_filter
 from api.db.models import Bookmark, Posts
 from api.posts.algorithm import safe_record_interaction
 from api.posts.service import PostService
@@ -23,6 +24,7 @@ class BookmarkService:
     async def add_bookmark(self, user_id: UUID, post_id: UUID, session: AsyncSession) -> Bookmark:
         try:
             post = await self.post_service.get_post_by_id(str(post_id), session)
+            await ensure_can_view_post(post, user_id, session)
 
             existing = await self._get_bookmark(user_id, post_id, session)
             if existing:
@@ -74,7 +76,7 @@ class BookmarkService:
             result = await session.execute(
                 select(Posts)
                 .join(Bookmark, Bookmark.post_id == Posts.id)
-                .where(Bookmark.user_id == user_id)
+                .where(Bookmark.user_id == user_id, visible_posts_filter(user_id))
                 .order_by(Bookmark.created_at.desc())
                 .offset(offset)
                 .limit(limit)

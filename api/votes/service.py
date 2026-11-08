@@ -5,6 +5,7 @@ from fastapi import HTTPException, status
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
+from api.communities.access import ensure_can_view_post
 from api.db.models import Posts, Votes, VoteType
 from api.posts.algorithm import safe_record_interaction
 from api.posts.service import PostService
@@ -40,6 +41,7 @@ class VoteService:
             post = await self.post_service.get_post_by_id(str(vote_data.post_id), session)
             if not post:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Post not found")
+            await ensure_can_view_post(post, vote_data.user_id, session)
             
             if existing_vote:
                 if existing_vote.vote_type == vote_data.vote_type:

@@ -9,6 +9,7 @@ from redis.asyncio import Redis
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
+from api.communities.access import visible_posts_filter
 from api.db.models import Posts
 from api.db.redis import redis_client
 
@@ -106,7 +107,7 @@ async def get_fyp_recommendations(
         has_interactions = await redis.exists(_user_interactions_key(user_id))
 
         if not has_interactions:
-            return await get_popular_posts(session, limit, offset)
+            return await get_popular_posts(session, user_id, limit, offset)
         return await get_personalized_posts(redis, session, user_id, limit, offset)
 
     except HTTPException:
@@ -119,10 +120,11 @@ async def get_fyp_recommendations(
 
 
 async def get_popular_posts(
-    session: AsyncSession, limit: int, offset: int = 0
+    session: AsyncSession, user_id: UUID, limit: int, offset: int = 0
 ) -> list[Posts]:
     result = await session.execute(
         select(Posts)
+        .where(visible_posts_filter(user_id))
         .order_by(Posts.upvote_count.desc())
         .offset(offset)
         .limit(limit)
@@ -132,6 +134,7 @@ async def get_popular_posts(
 
 async def _fetch_posts_by_ids(
     session: AsyncSession,
+    user_id: UUID,
     post_ids: list[UUID],
     exclude_ids: set[UUID],
     limit: int,
@@ -145,7 +148,9 @@ async def _fetch_posts_by_ids(
     if not candidate_ids:
         return []
 
-    result = await session.execute(select(Posts).where(Posts.id.in_(candidate_ids)))
+    result = await session.execute(
+        select(Posts).where(Posts.id.in_(candidate_ids), visible_posts_filter(user_id))
+    )
     posts_by_id = {post.id: post for post in result.scalars().all()}
 
     if rank_order:
@@ -178,7 +183,7 @@ async def get_personalized_posts(
     if preferred_author_ids:
         query = (
             select(Posts)
-            .where(Posts.author_id.in_(preferred_author_ids))
+            .where(Posts.author_id.in_(preferred_author_ids), visible_posts_filter(user_id))
             .order_by(Posts.upvote_count.desc())
             .limit(candidate_count)
         )
@@ -198,6 +203,7 @@ async def get_personalized_posts(
         exclude = seen | collected_ids
         backfill = await _fetch_posts_by_ids(
             session,
+            user_id,
             ranked_post_ids,
             exclude,
             candidate_count - len(posts),
@@ -207,6 +213,6 @@ async def get_personalized_posts(
         posts.extend(backfill)
 
     if not posts:
-        return await get_popular_posts(session, limit, offset)
+        return await get_popular_posts(session, user_id, limit, offset)
 
     return posts[offset : offset + limit]

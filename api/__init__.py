@@ -7,6 +7,7 @@ from api.comments.routes import router as comments_router
 from api.votes.routes import router as votes_router
 from api.follows.routes import router as follows_router
 from api.bookmarks.routes import router as bookmarks_router
+from api.communities.routes import router as communities_router
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -27,3 +28,4 @@ app.include_router(comments_router)
 app.include_router(votes_router)
 app.include_router(follows_router)
 app.include_router(bookmarks_router)
+app.include_router(communities_router)

@@ -6,6 +6,7 @@ from sqlalchemy.orm.attributes import set_committed_value
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
+from api.communities.access import ensure_can_participate, ensure_can_view_post
 from api.db.models import Comments, Posts
 from api.posts.algorithm import safe_record_interaction
 from api.posts.service import PostService
@@ -27,6 +28,7 @@ class CommentService:
             post = await self.post_service.get_post_by_id(
                 str(comment_data.post_id), session
             )
+            await ensure_can_participate(post, comment_data.user_id, session)
             if post:
                 post.comment_count += 1
                 await session.commit()
@@ -47,9 +49,16 @@ class CommentService:
 
             return new_comment
         
+        except HTTPException:
+            await session.rollback()
+            raise
         except Exception as e:
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Error creating comment: {e}")
         
+    async def ensure_can_view(self, post_id: UUID, user_id: UUID, session: AsyncSession) -> None:
+        post = await self.post_service.get_post_by_id(str(post_id), session)
+        await ensure_can_view_post(post, user_id, session)
+
     async def load_replies_recursively(self, comment: Comments, session: AsyncSession, depth: int = 0, max_depth: int = 3):
         if depth >= max_depth:
             comment.replies = []

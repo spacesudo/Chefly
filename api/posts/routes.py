@@ -6,7 +6,8 @@ from api.posts.algorithm import get_fyp_recommendations
 from api.db.main import get_session
 from api.db.redis import redis_client
 from sqlmodel.ext.asyncio.session import AsyncSession
-from api.auth.dependencies import AccessTokenBearer
+from api.auth.dependencies import AccessTokenBearer, get_current_user_id
+from api.communities.access import ensure_can_view_post
 from logging import Logger
 from uuid import UUID
 import logging
@@ -32,7 +33,7 @@ async def create_post(post_data: PostCreate, session: AsyncSession = Depends(get
 
 @router.get("/all")
 async def get_all_posts(session: AsyncSession = Depends(get_session), token_details: dict = Depends(AccessTokenBearer())):
-    posts = await post_service.get_all_posts(session)
+    posts = await post_service.get_all_posts(get_current_user_id(token_details), session)
     return posts
 
 @router.get("/following-feed")
@@ -82,6 +83,7 @@ async def get_fyp_feed(
 @router.get("/{post_id}")
 async def get_post(post_id: str, session: AsyncSession = Depends(get_session), token_details: dict = Depends(AccessTokenBearer())):
     post = await post_service.get_post_by_id(post_id, session)
+    await ensure_can_view_post(post, get_current_user_id(token_details), session)
     return post
 
 @router.delete("/{post_id}")

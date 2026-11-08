@@ -16,6 +16,16 @@ class VoteType(str, Enum):
     UPVOTE = "upvote"
     DOWNVOTE = "downvote"
 
+class CommunityRole(str, Enum):
+    OWNER = "owner"
+    ADMIN = "admin"
+    MEMBER = "member"
+
+class JoinRequestStatus(str, Enum):
+    PENDING = "pending"
+    APPROVED = "approved"
+    REJECTED = "rejected"
+
 class Follows(SQLModel, table=True):
     __tablename__ = "follows"
     __table_args__ = (UniqueConstraint("follower_id", "following_id", name="unique_follower_following"),)
@@ -60,6 +70,10 @@ class Posts(SQLModel, table=True):
         sa_column=Column(pg.UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
     )
     author: "User" = Relationship(back_populates="posts")
+    community_id: Optional[UUID] = Field(
+        sa_column=Column(pg.UUID(as_uuid=True), ForeignKey("communities.id"), nullable=True, index=True),
+        default=None
+    )
     votes: List["Votes"] = Relationship(back_populates="post")
     comments: List["Comments"] = Relationship(back_populates="post")
     bookmarks: List["Bookmark"] = Relationship(back_populates="post")
@@ -179,4 +193,73 @@ class Bookmark(SQLModel, table=True):
     created_at: datetime = Field(
         sa_column=Column(pg.TIMESTAMP(timezone=True), nullable=False, server_default=text("CURRENT_TIMESTAMP"), index=True),
         default_factory=datetime.now,
+    )
+
+
+class Community(SQLModel, table=True):
+    __tablename__ = "communities"
+    id: UUID = Field(
+        sa_column=Column(pg.UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")),
+        default_factory=uuid4
+    )
+    name: str = Field(sa_column=Column(pg.VARCHAR(100), nullable=False, unique=True, index=True))
+    description: Optional[str] = Field(sa_column=Column(pg.TEXT, nullable=True), default=None)
+    is_private: bool = Field(sa_column=Column(pg.BOOLEAN, nullable=False, server_default="false", index=True), default=False)
+    owner_id: UUID = Field(
+        sa_column=Column(pg.UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True)
+    )
+    members_count: int = Field(sa_column=Column(pg.INTEGER, nullable=False, server_default="0", index=True), default=0)
+    created_at: datetime = Field(
+        sa_column=Column(pg.TIMESTAMP(timezone=True), nullable=False, server_default=text("CURRENT_TIMESTAMP"), index=True),
+        default_factory=datetime.now
+    )
+    updated_at: datetime = Field(
+        sa_column=Column(pg.TIMESTAMP(timezone=True), nullable=False, server_default=text("CURRENT_TIMESTAMP")),
+        default_factory=datetime.now
+    )
+
+
+class CommunityMember(SQLModel, table=True):
+    __tablename__ = "community_members"
+    __table_args__ = (UniqueConstraint("community_id", "user_id", name="unique_community_member"),)
+    id: UUID = Field(
+        sa_column=Column(pg.UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")),
+        default_factory=uuid4
+    )
+    community_id: UUID = Field(
+        sa_column=Column(pg.UUID(as_uuid=True), ForeignKey("communities.id"), nullable=False, index=True)
+    )
+    user_id: UUID = Field(
+        sa_column=Column(pg.UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True)
+    )
+    role: CommunityRole = Field(
+        sa_column=Column(pg.ENUM(CommunityRole, name="community_role", create_type=True), nullable=False, index=True),
+        default=CommunityRole.MEMBER
+    )
+    created_at: datetime = Field(
+        sa_column=Column(pg.TIMESTAMP(timezone=True), nullable=False, server_default=text("CURRENT_TIMESTAMP"), index=True),
+        default_factory=datetime.now
+    )
+
+
+class CommunityJoinRequest(SQLModel, table=True):
+    __tablename__ = "community_join_requests"
+    __table_args__ = (UniqueConstraint("community_id", "user_id", name="unique_community_join_request"),)
+    id: UUID = Field(
+        sa_column=Column(pg.UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")),
+        default_factory=uuid4
+    )
+    community_id: UUID = Field(
+        sa_column=Column(pg.UUID(as_uuid=True), ForeignKey("communities.id"), nullable=False, index=True)
+    )
+    user_id: UUID = Field(
+        sa_column=Column(pg.UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True)
+    )
+    status: JoinRequestStatus = Field(
+        sa_column=Column(pg.ENUM(JoinRequestStatus, name="join_request_status", create_type=True), nullable=False, index=True),
+        default=JoinRequestStatus.PENDING
+    )
+    created_at: datetime = Field(
+        sa_column=Column(pg.TIMESTAMP(timezone=True), nullable=False, server_default=text("CURRENT_TIMESTAMP"), index=True),
+        default_factory=datetime.now
     )

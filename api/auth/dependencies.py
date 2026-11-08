@@ -5,7 +5,25 @@ from fastapi.security.http import HTTPAuthorizationCredentials
 from .utils import decode_token
 from fastapi import HTTPException, status
 from datetime import datetime
+from uuid import UUID
 from api.db.redis import add_jwt_to_blacklist, is_jwt_blacklisted
+
+
+def get_current_user_id(token_details: dict) -> UUID:
+    user_id_str = token_details["user"]["user_id"]
+    if not user_id_str:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
+    try:
+        return UUID(user_id_str)
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid user ID format")
+
+
+def parse_uuid(value: str, label: str) -> UUID:
+    try:
+        return UUID(value)
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Invalid {label} ID format")
 
 class TokenBearer(HTTPBearer):
     def __init__(self, auto_error: bool = True):

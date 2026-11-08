@@ -5,6 +5,7 @@ from fastapi import HTTPException, status
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
+from api.communities.access import public_posts_filter, visible_posts_filter
 from api.db.models import Posts
 from api.follows.service import FollowService
 from api.posts.schemas import PostCreate, PostEdit
@@ -49,9 +50,9 @@ class PostService:
             await session.rollback()
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Error deleting post: {e}")
         
-    async def get_all_posts(self, session: AsyncSession) -> List[Posts]:
+    async def get_all_posts(self, user_id: UUID, session: AsyncSession) -> List[Posts]:
         try:
-            result = await session.execute(select(Posts))
+            result = await session.execute(select(Posts).where(visible_posts_filter(user_id)))
             posts = result.scalars().all()
             return list(posts)
         except Exception as e:
@@ -80,7 +81,7 @@ class PostService:
             
             result = await session.execute(
                 select(Posts)
-                .where(Posts.author_id.in_(following_ids))
+                .where(Posts.author_id.in_(following_ids), visible_posts_filter(user_id))
                 .order_by(Posts.created_at.desc())
                 .limit(limit)
                 .offset(offset) 
@@ -96,6 +97,7 @@ class PostService:
         try:
             result = await session.execute(
                 select(Posts)
+                .where(public_posts_filter())
                 .order_by(Posts.created_at.desc())
                 .order_by(Posts.upvote_count.desc())
                 .limit(limit)

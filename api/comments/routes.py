@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import JSONResponse
 from sqlmodel.ext.asyncio.session import AsyncSession
 
-from api.auth.dependencies import AccessTokenBearer
+from api.auth.dependencies import AccessTokenBearer, get_current_user_id
 from api.comments.schemas import CommentCreate, CommentEdit, CommentResponse
 from api.comments.service import CommentService
 from api.db.main import get_session
@@ -65,6 +65,7 @@ async def get_comments_by_post(
     except (ValueError, TypeError):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid post ID format")
     
+    await comment_service.ensure_can_view(post_uuid, get_current_user_id(token_details), session)
     comments = await comment_service.get_comments_by_post(post_uuid, session, include_replies=True)
     return [convert_comment_with_replies(comment) for comment in comments]
 
@@ -79,12 +80,15 @@ async def get_replies_to_comment(
     except (ValueError, TypeError):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid comment ID format")
     
+    comment = await comment_service.get_comment_by_id(comment_uuid, session)
+    await comment_service.ensure_can_view(comment.post_id, get_current_user_id(token_details), session)
     replies = await comment_service.get_replies_to_comment(comment_uuid, session)
     return [convert_comment_with_replies(reply) for reply in replies]
 
 @router.get("/{comment_id}")
 async def get_comment_by_id(comment_id: str, session: AsyncSession = Depends(get_session), token_details: dict = Depends(AccessTokenBearer())):
     comment = await comment_service.get_comment_by_id(comment_id, session)
+    await comment_service.ensure_can_view(comment.post_id, get_current_user_id(token_details), session)
     return comment
 
 @router.put("/{comment_id}")

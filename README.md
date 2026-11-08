@@ -155,6 +155,30 @@ Once the server is running, access the interactive API documentation:
 - `DELETE /bookmarks/posts/{post_id}` - Remove a bookmark (authenticated)
 - `GET /bookmarks/posts/{post_id}/status` - Check whether you bookmarked a post (authenticated)
 
+### Communities (`/communities`)
+All community endpoints are authenticated. Roles: `owner` (creator) > `admin` > `member`.
+
+- `POST /communities/` - Create a community (`name`, `description`, `is_private`); creator becomes owner
+- `GET /communities/` - List/search communities (`q`, `limit`, `offset`), sorted by members count
+- `GET /communities/me` - Communities you belong to, with your role
+- `GET /communities/{community_id}` - Community details (includes `my_role`)
+- `PUT /communities/{community_id}` - Edit name/description/privacy (owner/admin)
+- `DELETE /communities/{community_id}` - Delete community and its posts (owner)
+- `POST /communities/{community_id}/join` - Join a public community, or send a join request to a private one
+- `POST /communities/{community_id}/leave` - Leave a community (owner cannot leave)
+- `GET /communities/{community_id}/members` - List members (members only if private)
+- `POST /communities/{community_id}/members` - Add a user directly by `user_id` (owner/admin)
+- `DELETE /communities/{community_id}/members/{user_id}` - Remove a member (owner/admin; only owner can remove admins)
+- `PUT /communities/{community_id}/members/{user_id}/role` - Set role to `admin`/`member` (owner)
+- `GET /communities/{community_id}/requests` - Pending join requests (owner/admin)
+- `POST /communities/{community_id}/requests/{request_id}/approve` - Approve a join request (owner/admin)
+- `POST /communities/{community_id}/requests/{request_id}/reject` - Reject a join request (owner/admin)
+- `POST /communities/{community_id}/posts` - Create a post in the community (members)
+- `GET /communities/{community_id}/posts` - Community posts, newest first (members only if private)
+- `DELETE /communities/{community_id}/posts/{post_id}` - Delete a post (author or owner/admin)
+
+Community posts live in the `posts` table (`community_id`), so replies use `POST /comments/create` and voting/bookmarking work as normal. Replying requires membership. Posts in private communities are hidden from `/posts/feed` and only appear in `/posts/all`, `/posts/following-feed`, `/posts/fyp`, and bookmarks for members.
+
 ## FYP Recommendation Algorithm
 
 Personalized “For You” feed logic lives in `api/posts/algorithm.py`. It uses Redis as an ephemeral scoring layer on top of PostgreSQL for post retrieval.
@@ -241,6 +265,12 @@ Interaction recording is best-effort: if Redis is unavailable, the API request s
 - Unique constraint: one vote per user per post
 - Relationships: user, post
 
+### Communities
+- `Community`: name (unique), description, is_private, owner, members_count
+- `CommunityMember`: user membership with role (owner/admin/member); one per user per community
+- `CommunityJoinRequest`: pending/approved/rejected requests for private communities
+- Posts optionally belong to a community via `community_id`
+
 ### Follows
 - User following relationships
 - Unique constraint: one follow per user pair
@@ -275,6 +305,9 @@ chefly/
 │   ├── comments/            # Comments module
 │   ├── votes/               # Voting module
 │   ├── follows/             # Follow system module
+│   ├── bookmarks/           # Bookmarks module
+│   ├── communities/         # Communities, membership, join requests
+│   │   └── access.py        # Shared visibility/membership rules
 │   └── db/
 │       ├── main.py          # Database session management
 │       ├── models.py        # SQLModel database models
