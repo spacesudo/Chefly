@@ -156,6 +156,7 @@ Tags are normalized: lowercased, `#` stripped, spaces/underscores become `-`, ot
 
 - `GET /tags/suggested` - Starter tags (recipe, tip, baking, vegan, ...) followed by popular user tags (public)
 - `GET /tags/trending` - Most used tags on public posts in the last `days` (default 7), falls back to all-time popular (public)
+- `GET /tags/trending/posts` - Posts from the last `days` carrying any of the top 10 trending tags, ranked by engagement (`upvotes - downvotes + 2 × comments`), then recency (authenticated; `limit`/`offset`/`days`)
 - `GET /tags/search?q=` - Prefix search for autocomplete (public)
 - `GET /tags/{name}/posts` - Posts with a tag, newest first (authenticated; respects private communities)
 
@@ -195,11 +196,12 @@ Personalized “For You” feed logic lives in `api/posts/algorithm.py`. It uses
 
 ### How it works
 
-1. **Record interactions** — Votes, comments, and follows/unfollows automatically call `safe_record_interaction()` after a successful DB write. Each event applies a weighted score.
-2. **Cold start** — Users with no interaction history receive popular posts (highest `upvote_count` from PostgreSQL).
-3. **Personalized feed** — Users with history get:
+1. **Record interactions** — Votes, comments, bookmarks, and follows/unfollows automatically call `safe_record_interaction()` after a successful DB write. Each event applies a weighted score to the post, its author, and its tags.
+2. **Cold start** — Users with no interaction history get posts from **trending tags** first, then popular posts (highest `upvote_count`).
+3. **Personalized feed** — Users with history get, in order:
    - Unseen posts from **preferred authors** (ranked by cumulative interaction weight)
    - Unseen posts carrying the user's **preferred tags** (top 10 positively scored tags)
+   - Unseen posts from **trending tags** (helps users discover topics outside their usual tags)
    - Backfill from the **global post leaderboard** (`fyp:ranked_posts` in Redis)
    - Fallback to popular posts if Redis/SQL return nothing
 

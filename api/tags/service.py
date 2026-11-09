@@ -112,9 +112,7 @@ class TagService:
         )
         return [TagResponse(name=t.name, post_count=t.post_count) for t in result.scalars().all()]
 
-    async def trending_tags(self, session: AsyncSession, limit: int = 10, days: int = 7) -> List[TagResponse]:
-        """Tags used most on public posts in the last `days`; falls back to all-time popular."""
-        since = datetime.now(timezone.utc) - timedelta(days=days)
+    async def _recent_tag_usage(self, session: AsyncSession, since: datetime, limit: int) -> List[TagResponse]:
         uses = func.count(PostTag.post_id).label("uses")
         result = await session.execute(
             select(Tag.name, uses)
@@ -122,11 +120,57 @@ class TagService:
             .join(Posts, Posts.id == PostTag.post_id)
             .where(Posts.created_at >= since, public_posts_filter())
             .group_by(Tag.name)
-            .order_by(uses.desc())
+            .order_by(uses.desc(), Tag.name)
             .limit(limit)
         )
-        trending = [TagResponse(name=name, post_count=count) for name, count in result.all()]
-        return trending or await self.popular_tags(session, limit)
+        return [TagResponse(name=name, post_count=count) for name, count in result.all()]
+
+    async def trending_tags(self, session: AsyncSession, limit: int = 10, days: int = 7) -> List[TagResponse]:
+        """Tags used most on public posts in the last `days`; falls back to all-time popular."""
+        since = datetime.now(timezone.utc) - timedelta(days=days)
+        return await self._recent_tag_usage(session, since, limit) or await self.popular_tags(session, limit)
+
+    async def get_trending_posts(
+        self,
+        user_id: UUID,
+        session: AsyncSession,
+        limit: int = 20,
+        offset: int = 0,
+        days: int = 7,
+        tag_limit: int = 10,
+        exclude_ids: set[UUID] | None = None,
+    ) -> List[Posts]:
+        """Posts carrying any trending tag, ranked by engagement.
+
+        Uses posts from the last `days` when tags are trending in that window; if nothing is trending,
+        falls back to all-time popular tags without the date restriction.
+        """
+        since = datetime.now(timezone.utc) - timedelta(days=days)
+        trending = await self._recent_tag_usage(session, since, tag_limit)
+        if not trending:
+            trending, since = await self.popular_tags(session, tag_limit), None
+        if not trending:
+            return []
+
+        tagged_post_ids = (
+            select(PostTag.post_id)
+            .join(Tag, Tag.id == PostTag.tag_id)
+            .where(Tag.name.in_([t.name for t in trending]))
+        )
+        engagement = (
+            func.coalesce(Posts.upvote_count, 0)
+            - func.coalesce(Posts.downvote_count, 0)
+            + 2 * func.coalesce(Posts.comment_count, 0)
+        )
+        query = select(Posts).where(Posts.id.in_(tagged_post_ids), visible_posts_filter(user_id))
+        if since is not None:
+            query = query.where(Posts.created_at >= since)
+        if exclude_ids:
+            query = query.where(Posts.id.notin_(exclude_ids))
+        result = await session.execute(
+            query.order_by(engagement.desc(), Posts.created_at.desc()).offset(offset).limit(limit)
+        )
+        return list(result.scalars().all())
 
     async def suggested_tags(self, session: AsyncSession, limit: int = 20) -> List[TagResponse]:
         """Starter tags first, then the most popular user-created tags."""

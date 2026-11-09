@@ -12,8 +12,10 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 from api.communities.access import visible_posts_filter
 from api.db.models import Posts, PostTag, Tag
 from api.db.redis import redis_client
+from api.tags.service import TagService
 
 logger = logging.getLogger(__name__)
+tag_service = TagService()
 
 INTERACTIONS_TTL = 60 * 60 * 24 * 7
 PREFERRED_TAGS_LIMIT = 10
@@ -121,7 +123,7 @@ async def get_fyp_recommendations(
         has_interactions = await redis.exists(_user_interactions_key(user_id))
 
         if not has_interactions:
-            return await get_popular_posts(session, user_id, limit, offset)
+            return await get_cold_start_posts(session, user_id, limit, offset)
         return await get_personalized_posts(redis, session, user_id, limit, offset)
 
     except HTTPException:
@@ -134,16 +136,32 @@ async def get_fyp_recommendations(
 
 
 async def get_popular_posts(
-    session: AsyncSession, user_id: UUID, limit: int, offset: int = 0
+    session: AsyncSession,
+    user_id: UUID,
+    limit: int,
+    offset: int = 0,
+    exclude_ids: set[UUID] | None = None,
 ) -> list[Posts]:
+    query = select(Posts).where(visible_posts_filter(user_id))
+    if exclude_ids:
+        query = query.where(Posts.id.notin_(exclude_ids))
     result = await session.execute(
-        select(Posts)
-        .where(visible_posts_filter(user_id))
-        .order_by(Posts.upvote_count.desc())
-        .offset(offset)
-        .limit(limit)
+        query.order_by(Posts.upvote_count.desc()).offset(offset).limit(limit)
     )
     return list(result.scalars().all())
+
+
+async def get_cold_start_posts(
+    session: AsyncSession, user_id: UUID, limit: int, offset: int = 0
+) -> list[Posts]:
+    """No history yet: lead with posts from trending tags, then fill with popular posts."""
+    candidate_count = offset + limit
+    posts = await tag_service.get_trending_posts(user_id, session, limit=candidate_count)
+    if len(posts) < candidate_count:
+        posts += await get_popular_posts(
+            session, user_id, candidate_count - len(posts), exclude_ids={p.id for p in posts}
+        )
+    return posts[offset : offset + limit]
 
 
 async def _fetch_posts_by_ids(
@@ -230,6 +248,13 @@ async def get_personalized_posts(
             for post in result.scalars().all():
                 posts.append(post)
                 collected_ids.add(post.id)
+
+    if len(posts) < candidate_count:
+        trending = await tag_service.get_trending_posts(
+            user_id, session, limit=candidate_count - len(posts), exclude_ids=seen | collected_ids
+        )
+        posts.extend(trending)
+        collected_ids.update(p.id for p in trending)
 
     if len(posts) < candidate_count:
         ranked_post_ids = [

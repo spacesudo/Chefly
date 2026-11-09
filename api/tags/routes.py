@@ -23,6 +23,13 @@ async def get_trending_tags(limit: int = 10, days: int = 7, session: AsyncSessio
     return await tag_service.trending_tags(session, limit, days)
 
 
+@router.get("/trending/posts", response_model=List[PostResponse])
+async def get_trending_posts(limit: int = 20, offset: int = 0, days: int = 7, session: AsyncSession = Depends(get_session), token_details: dict = Depends(AccessTokenBearer())):
+    user_id = get_current_user_id(token_details)
+    posts = await tag_service.get_trending_posts(user_id, session, limit, offset, days)
+    return await tag_service.to_responses(posts, session)
+
+
 @router.get("/search", response_model=List[TagResponse])
 async def search_tags(q: str, limit: int = 10, session: AsyncSession = Depends(get_session)):
     return await tag_service.search_tags(q, session, limit)
