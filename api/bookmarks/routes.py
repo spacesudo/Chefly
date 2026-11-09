@@ -1,4 +1,5 @@
 import logging
+from typing import List
 
 from fastapi import APIRouter, Depends, status
 from fastapi.responses import JSONResponse
@@ -8,17 +9,21 @@ from api.auth.dependencies import AccessTokenBearer, get_current_user_id, parse_
 from api.bookmarks.schemas import BookmarkResponse
 from api.bookmarks.service import BookmarkService
 from api.db.main import get_session
+from api.posts.schemas import PostResponse
+from api.tags.service import TagService
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/bookmarks", tags=["bookmarks"])
 bookmark_service = BookmarkService()
+tag_service = TagService()
 
 
-@router.get("/")
+@router.get("/", response_model=List[PostResponse])
 async def get_my_bookmarks(limit: int = 20, offset: int = 0, session: AsyncSession = Depends(get_session), token_details: dict = Depends(AccessTokenBearer())):
     user_id = get_current_user_id(token_details)
-    return await bookmark_service.get_bookmarked_posts(user_id, session, limit, offset)
+    posts = await bookmark_service.get_bookmarked_posts(user_id, session, limit, offset)
+    return await tag_service.to_responses(posts, session)
 
 
 @router.post("/posts/{post_id}", response_model=BookmarkResponse)

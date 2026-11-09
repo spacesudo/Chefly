@@ -18,7 +18,7 @@ class VoteService:
     post_service = PostService()
 
     async def _record_vote_interaction(
-        self, user_id: UUID, post: Posts, vote_type: VoteType
+        self, user_id: UUID, post: Posts, vote_type: VoteType, session: AsyncSession
     ) -> None:
         interaction_type = "upvotes" if vote_type == VoteType.UPVOTE else "downvotes"
         await safe_record_interaction(
@@ -26,6 +26,7 @@ class VoteService:
             post_id=post.id,
             interaction_type=interaction_type,
             author_id=post.author_id,
+            tags=await self.post_service.tag_service.get_tag_names(post.id, session),
         )
     
     async def create_vote(self, vote_data: VoteCreate, session: AsyncSession) -> Votes:
@@ -64,7 +65,7 @@ class VoteService:
                 await session.refresh(existing_vote)
                 await session.refresh(post)
                 await self._record_vote_interaction(
-                    vote_data.user_id, post, vote_data.vote_type
+                    vote_data.user_id, post, vote_data.vote_type, session
                 )
                 return existing_vote
             else:
@@ -82,7 +83,7 @@ class VoteService:
                 await session.refresh(new_vote)
                 await session.refresh(post)
                 await self._record_vote_interaction(
-                    vote_data.user_id, post, vote_data.vote_type
+                    vote_data.user_id, post, vote_data.vote_type, session
                 )
                 return new_vote
                 
@@ -124,6 +125,7 @@ class VoteService:
                         post_id=post.id,
                         interaction_type=reverse_type,
                         author_id=post.author_id,
+                        tags=await self.post_service.tag_service.get_tag_names(post.id, session),
                     )
                 await session.delete(vote)
                 await session.commit()

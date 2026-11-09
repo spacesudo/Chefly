@@ -10,12 +10,13 @@ from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from api.communities.access import visible_posts_filter
-from api.db.models import Posts
+from api.db.models import Posts, PostTag, Tag
 from api.db.redis import redis_client
 
 logger = logging.getLogger(__name__)
 
 INTERACTIONS_TTL = 60 * 60 * 24 * 7
+PREFERRED_TAGS_LIMIT = 10
 
 SCORE_WEIGHT = {
     "upvotes": 1,
@@ -41,6 +42,10 @@ def _user_preferred_authors_key(user_id: UUID) -> str:
     return f"user:{user_id}:preferred_authors"
 
 
+def _user_preferred_tags_key(user_id: UUID) -> str:
+    return f"user:{user_id}:preferred_tags"
+
+
 async def get_redis_client() -> Redis:
     return redis_client
 
@@ -53,6 +58,7 @@ async def record_interaction(
     post_id: UUID | None = None,
     *,
     mark_viewed: bool = True,
+    tags: list[str] | None = None,
 ):
     weight = SCORE_WEIGHT.get(interaction_type, 0.5)
     interactions_key = _user_interactions_key(user_id)
@@ -71,6 +77,12 @@ async def record_interaction(
         str(author_id),
     )
 
+    if tags:
+        tags_key = _user_preferred_tags_key(user_id)
+        for tag in tags:
+            await redis.zincrby(tags_key, weight, tag)
+        await redis.expire(tags_key, INTERACTIONS_TTL)
+
     await redis.expire(interactions_key, INTERACTIONS_TTL)
     await redis.expire(_user_preferred_authors_key(user_id), INTERACTIONS_TTL)
 
@@ -82,6 +94,7 @@ async def safe_record_interaction(
     post_id: UUID | None = None,
     *,
     mark_viewed: bool = True,
+    tags: list[str] | None = None,
 ) -> None:
     try:
         await record_interaction(
@@ -91,6 +104,7 @@ async def safe_record_interaction(
             author_id=author_id,
             post_id=post_id,
             mark_viewed=mark_viewed,
+            tags=tags,
         )
     except Exception:
         logger.warning("Failed to record FYP interaction", exc_info=True)
@@ -192,6 +206,28 @@ async def get_personalized_posts(
         result = await session.execute(query)
         for post in result.scalars().all():
             if post.id not in collected_ids:
+                posts.append(post)
+                collected_ids.add(post.id)
+
+    if len(posts) < candidate_count:
+        preferred_tags = await redis.zrevrangebyscore(
+            _user_preferred_tags_key(user_id), "+inf", "(0", start=0, num=PREFERRED_TAGS_LIMIT
+        )
+        if preferred_tags:
+            query = (
+                select(Posts)
+                .join(PostTag, PostTag.post_id == Posts.id)
+                .join(Tag, Tag.id == PostTag.tag_id)
+                .where(Tag.name.in_(preferred_tags), visible_posts_filter(user_id))
+                .distinct()
+                .order_by(Posts.upvote_count.desc(), Posts.created_at.desc())
+                .limit(candidate_count - len(posts))
+            )
+            exclude = seen | collected_ids
+            if exclude:
+                query = query.where(Posts.id.notin_(exclude))
+            result = await session.execute(query)
+            for post in result.scalars().all():
                 posts.append(post)
                 collected_ids.add(post.id)
 

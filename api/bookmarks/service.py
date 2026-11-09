@@ -39,6 +39,7 @@ class BookmarkService:
                 post_id=post.id,
                 interaction_type="bookmarks",
                 author_id=post.author_id,
+                tags=await self.post_service.tag_service.get_tag_names(post.id, session),
             )
             return bookmark
         except HTTPException:
@@ -63,6 +64,7 @@ class BookmarkService:
                 interaction_type="unbookmarks",
                 author_id=post.author_id,
                 mark_viewed=False,
+                tags=await self.post_service.tag_service.get_tag_names(post.id, session),
             )
         except HTTPException:
             await session.rollback()

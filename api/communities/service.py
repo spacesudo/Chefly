@@ -295,17 +295,8 @@ class CommunityService:
             await get_community_or_404(community_id, session)
             if not await get_membership(community_id, user_id, session):
                 raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You must be a member of this community")
-            post = Posts(
-                title=data.title,
-                content=data.content,
-                content_type=data.content_type,
-                author_id=user_id,
-                community_id=community_id,
-            )
-            session.add(post)
-            await session.commit()
-            await session.refresh(post)
-            return post
+            data.author_id = str(user_id)
+            return await self.post_service.create_post(data, session, community_id=community_id)
 
     async def get_posts(self, community_id: UUID, user_id: UUID, session: AsyncSession, limit: int = 20, offset: int = 0) -> List[Posts]:
         async with _handle_errors(session, "getting community posts"):

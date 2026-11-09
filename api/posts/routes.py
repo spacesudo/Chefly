@@ -1,6 +1,7 @@
+from typing import List
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import JSONResponse
-from api.posts.schemas import PostCreate, PostEdit
+from api.posts.schemas import PostCreate, PostEdit, PostResponse
 from api.posts.service import PostService
 from api.posts.algorithm import get_fyp_recommendations
 from api.db.main import get_session
@@ -16,6 +17,7 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/posts", tags=["posts"])
 post_service = PostService()
+tag_service = post_service.tag_service
 
 @router.post("/create")
 async def create_post(post_data: PostCreate, session: AsyncSession = Depends(get_session), token_details: dict = Depends(AccessTokenBearer())):
@@ -25,18 +27,17 @@ async def create_post(post_data: PostCreate, session: AsyncSession = Depends(get
         logger.error("User not found")
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
     
-    if not post_data.author_id:
-        post_data.author_id = user_id
+    post_data.author_id = user_id
         
     post = await post_service.create_post(post_data, session)
-    return post
+    return await tag_service.to_response(post, session)
 
-@router.get("/all")
+@router.get("/all", response_model=List[PostResponse])
 async def get_all_posts(session: AsyncSession = Depends(get_session), token_details: dict = Depends(AccessTokenBearer())):
     posts = await post_service.get_all_posts(get_current_user_id(token_details), session)
-    return posts
+    return await tag_service.to_responses(posts, session)
 
-@router.get("/following-feed")
+@router.get("/following-feed", response_model=List[PostResponse])
 async def get_following_feed(limit: int = 20, offset: int = 0, session: AsyncSession = Depends(get_session), token_details: dict = Depends(AccessTokenBearer())):
     user_id_str = token_details["user"]["user_id"]
     if not user_id_str:
@@ -48,14 +49,14 @@ async def get_following_feed(limit: int = 20, offset: int = 0, session: AsyncSes
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid user ID format")
     
     posts = await post_service.following_feed(user_id, session, limit, offset)
-    return posts
+    return await tag_service.to_responses(posts, session)
 
-@router.get("/feed")
+@router.get("/feed", response_model=List[PostResponse])
 async def get_feed(limit: int = 20, offset: int = 0, session: AsyncSession = Depends(get_session)):
     posts = await post_service.feed(session, limit, offset)
-    return posts
+    return await tag_service.to_responses(posts, session)
 
-@router.get("/fyp")
+@router.get("/fyp", response_model=List[PostResponse])
 async def get_fyp_feed(
     limit: int = 20,
     offset: int = 0,
@@ -78,13 +79,13 @@ async def get_fyp_feed(
         limit=limit,
         offset=offset,
     )
-    return posts
+    return await tag_service.to_responses(posts, session)
 
-@router.get("/{post_id}")
+@router.get("/{post_id}", response_model=PostResponse)
 async def get_post(post_id: str, session: AsyncSession = Depends(get_session), token_details: dict = Depends(AccessTokenBearer())):
     post = await post_service.get_post_by_id(post_id, session)
     await ensure_can_view_post(post, get_current_user_id(token_details), session)
-    return post
+    return await tag_service.to_response(post, session)
 
 @router.delete("/{post_id}")
 async def delete_post(post_id: str, session: AsyncSession = Depends(get_session), token_details: dict = Depends(AccessTokenBearer())):
@@ -123,5 +124,5 @@ async def edit_post(post_id: str, post_data: PostEdit, session: AsyncSession = D
     if post.author_id != user_id:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You are not the author of this post")
     post = await post_service.edit_post(post_id, post_data, session)
-    return post
+    return await tag_service.to_response(post, session)
 

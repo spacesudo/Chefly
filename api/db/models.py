@@ -7,11 +7,6 @@ from sqlalchemy import ForeignKey, UniqueConstraint, text
 import sqlalchemy.dialects.postgresql as pg
 from sqlmodel import Column, Field, Relationship, SQLModel
 
-class PostType(str, Enum):
-    RECIPE = "recipe"
-    TIP = "tip"
-    OTHER = "other"
-
 class VoteType(str, Enum):
     UPVOTE = "upvote"
     DOWNVOTE = "downvote"
@@ -54,9 +49,6 @@ class Posts(SQLModel, table=True):
         default_factory=uuid4
     )
     title: str = Field(sa_column=Column(pg.VARCHAR(255), nullable=False, index=True))
-    content_type: PostType = Field(
-        sa_column=Column(pg.ENUM(PostType, name="post_type", create_type=True), nullable=False, index=True)
-    )
     content: str = Field(sa_column=Column(pg.TEXT, nullable=False))
     created_at: datetime = Field(
         sa_column=Column(pg.TIMESTAMP(timezone=True), nullable=False, server_default=text("CURRENT_TIMESTAMP")),
@@ -193,6 +185,30 @@ class Bookmark(SQLModel, table=True):
     created_at: datetime = Field(
         sa_column=Column(pg.TIMESTAMP(timezone=True), nullable=False, server_default=text("CURRENT_TIMESTAMP"), index=True),
         default_factory=datetime.now,
+    )
+
+
+class Tag(SQLModel, table=True):
+    __tablename__ = "tags"
+    id: UUID = Field(
+        sa_column=Column(pg.UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")),
+        default_factory=uuid4
+    )
+    name: str = Field(sa_column=Column(pg.VARCHAR(30), nullable=False, unique=True, index=True))
+    post_count: int = Field(sa_column=Column(pg.INTEGER, nullable=False, server_default="0", index=True), default=0)
+    created_at: datetime = Field(
+        sa_column=Column(pg.TIMESTAMP(timezone=True), nullable=False, server_default=text("CURRENT_TIMESTAMP")),
+        default_factory=datetime.now
+    )
+
+
+class PostTag(SQLModel, table=True):
+    __tablename__ = "post_tags"
+    post_id: UUID = Field(
+        sa_column=Column(pg.UUID(as_uuid=True), ForeignKey("posts.id"), primary_key=True)
+    )
+    tag_id: UUID = Field(
+        sa_column=Column(pg.UUID(as_uuid=True), ForeignKey("tags.id"), primary_key=True, index=True)
     )
 
 

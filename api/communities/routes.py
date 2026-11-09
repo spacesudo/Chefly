@@ -18,12 +18,14 @@ from api.communities.schemas import (
 from api.communities.service import CommunityService
 from api.db.main import get_session
 from api.db.models import Community, CommunityRole
-from api.posts.schemas import PostCreate
+from api.posts.schemas import PostCreate, PostResponse
+from api.tags.service import TagService
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/communities", tags=["communities"])
 community_service = CommunityService()
+tag_service = TagService()
 
 
 def _to_response(community: Community, role: Optional[CommunityRole] = None) -> CommunityResponse:
@@ -135,16 +137,18 @@ async def reject_join_request(community_id: str, request_id: str, session: Async
     return _message("Join request rejected")
 
 
-@router.post("/{community_id}/posts")
+@router.post("/{community_id}/posts", response_model=PostResponse)
 async def create_community_post(community_id: str, data: PostCreate, session: AsyncSession = Depends(get_session), token_details: dict = Depends(AccessTokenBearer())):
     user_id = get_current_user_id(token_details)
-    return await community_service.create_post(parse_uuid(community_id, "community"), user_id, data, session)
+    post = await community_service.create_post(parse_uuid(community_id, "community"), user_id, data, session)
+    return await tag_service.to_response(post, session)
 
 
-@router.get("/{community_id}/posts")
+@router.get("/{community_id}/posts", response_model=List[PostResponse])
 async def get_community_posts(community_id: str, limit: int = 20, offset: int = 0, session: AsyncSession = Depends(get_session), token_details: dict = Depends(AccessTokenBearer())):
     user_id = get_current_user_id(token_details)
-    return await community_service.get_posts(parse_uuid(community_id, "community"), user_id, session, limit, offset)
+    posts = await community_service.get_posts(parse_uuid(community_id, "community"), user_id, session, limit, offset)
+    return await tag_service.to_responses(posts, session)
 
 
 @router.delete("/{community_id}/posts/{post_id}")

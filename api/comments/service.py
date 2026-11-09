@@ -45,6 +45,7 @@ class CommentService:
                     post_id=post.id,
                     interaction_type="comments",
                     author_id=post.author_id,
+                    tags=await self.post_service.tag_service.get_tag_names(post.id, session),
                 )
 
             return new_comment

@@ -13,7 +13,7 @@ A modern, asynchronous social media platform API for cooking recipe sharing, vot
 
 ### Posts
 - Create, read, update, and delete posts
-- Multiple content types: Recipes, Tips, and Other
+- Free-form hashtags (up to 10 per post) with a suggested starter list, trending tags and tag search
 - Post metadata tracking (upvotes, downvotes, comment counts)
 - Author-based access control
 - Chronological public feed (`GET /posts/feed`)
@@ -116,7 +116,7 @@ Once the server is running, access the interactive API documentation:
 - `POST /auth/logout` - Logout (blacklist token)
 
 ### Posts (`/posts`)
-- `POST /posts/create` - Create a new post (authenticated)
+- `POST /posts/create` - Create a new post (authenticated). Body: `title`, `content`, `tags` (e.g. `["#Meal Prep", "vegan"]`)
 - `GET /posts/all` - Get all posts (authenticated)
 - `GET /posts/feed` - Public chronological feed sorted by recency and upvotes
 - `GET /posts/following-feed` - Posts from users you follow (authenticated; falls back to `/feed` if empty)
@@ -148,6 +148,16 @@ Once the server is running, access the interactive API documentation:
 - `GET /follows/users/{user_id}/following-count` - Get following count (public)
 - `GET /follows/users/{user_id}/followers-usernames` - Get follower usernames (public)
 - `GET /follows/users/{user_id}/following-usernames` - Get following usernames (public)
+
+All post responses include a `tags` list. `PUT /posts/{post_id}` accepts `tags` to replace a post's tags (`[]` clears them; omit to leave unchanged).
+
+### Tags (`/tags`)
+Tags are normalized: lowercased, `#` stripped, spaces/underscores become `-`, other symbols removed (`"#Meal Prep"` → `meal-prep`). Max 10 tags per post, 30 characters each.
+
+- `GET /tags/suggested` - Starter tags (recipe, tip, baking, vegan, ...) followed by popular user tags (public)
+- `GET /tags/trending` - Most used tags on public posts in the last `days` (default 7), falls back to all-time popular (public)
+- `GET /tags/search?q=` - Prefix search for autocomplete (public)
+- `GET /tags/{name}/posts` - Posts with a tag, newest first (authenticated; respects private communities)
 
 ### Bookmarks (`/bookmarks`)
 - `GET /bookmarks/` - Get your bookmarked posts, newest first (authenticated; `limit`/`offset`)
@@ -189,6 +199,7 @@ Personalized “For You” feed logic lives in `api/posts/algorithm.py`. It uses
 2. **Cold start** — Users with no interaction history receive popular posts (highest `upvote_count` from PostgreSQL).
 3. **Personalized feed** — Users with history get:
    - Unseen posts from **preferred authors** (ranked by cumulative interaction weight)
+   - Unseen posts carrying the user's **preferred tags** (top 10 positively scored tags)
    - Backfill from the **global post leaderboard** (`fyp:ranked_posts` in Redis)
    - Fallback to popular posts if Redis/SQL return nothing
 
@@ -212,6 +223,7 @@ Personalized “For You” feed logic lives in `api/posts/algorithm.py`. It uses
 |-----|------|---------|
 | `user:{user_id}:interactions` | Hash | Per-user post interaction scores (7-day TTL) |
 | `user:{user_id}:preferred_authors` | Sorted set | Authors the user engages with most (7-day TTL) |
+| `user:{user_id}:preferred_tags` | Sorted set | Tags on posts the user engages with, same weights (7-day TTL) |
 | `user:{user_id}:viewed_posts` | Set | Posts already surfaced to the user |
 | `fyp:ranked_posts` | Sorted set | Global post ranking by aggregate interaction score |
 
@@ -251,7 +263,7 @@ Interaction recording is best-effort: if Redis is unavailable, the API request s
 - Relationships: posts, votes, comments, follows
 
 ### Posts
-- Content posts (recipes, tips, other)
+- Content posts, tagged via `Tag` / `PostTag` (many-to-many; `Tag.post_count` kept in sync)
 - Tracks: upvote_count, downvote_count, comment_count
 - Author relationship
 
@@ -306,6 +318,7 @@ chefly/
 │   ├── votes/               # Voting module
 │   ├── follows/             # Follow system module
 │   ├── bookmarks/           # Bookmarks module
+│   ├── tags/                # Tags: normalization, starter list, trending/search
 │   ├── communities/         # Communities, membership, join requests
 │   │   └── access.py        # Shared visibility/membership rules
 │   └── db/

@@ -1,3 +1,4 @@
+from datetime import datetime
 from typing import List
 from uuid import UUID
 
@@ -10,19 +11,24 @@ from api.communities.access import public_posts_filter, visible_posts_filter
 from api.db.models import Bookmark, Comments, Posts, Votes
 from api.follows.service import FollowService
 from api.posts.schemas import PostCreate, PostEdit
+from api.tags.service import TagService
 
 class PostService:
     
     follow_service = FollowService()
+    tag_service = TagService()
     
-    async def create_post(self, post_data: PostCreate, session: AsyncSession) -> Posts:
+    async def create_post(self, post_data: PostCreate, session: AsyncSession, community_id: UUID | None = None) -> Posts:
         try:
-            new_post = Posts(**post_data.model_dump())
+            new_post = Posts(**post_data.model_dump(exclude={"tags"}), community_id=community_id)
             session.add(new_post)
+            await session.flush()
+            await self.tag_service.set_post_tags(new_post.id, post_data.tags, session)
             await session.commit()
             await session.refresh(new_post)
             return new_post
         except Exception as e:
+            await session.rollback()
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Error creating post: {e}")
         
     async def get_post_by_id(self, post_id: str, session: AsyncSession) -> Posts | None:
@@ -40,7 +46,8 @@ class PostService:
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Error getting post by id: {e}")
         
     async def delete_posts_with_dependents(self, post_ids, session: AsyncSession) -> None:
-        """Delete posts along with their votes, comments and bookmarks. Caller commits."""
+        """Delete posts along with their votes, comments, bookmarks and tags. Caller commits."""
+        await self.tag_service.remove_tags_for_posts(post_ids, session)
         await session.execute(delete(Votes).where(Votes.post_id.in_(post_ids)))
         await session.execute(delete(Comments).where(Comments.post_id.in_(post_ids)))
         await session.execute(delete(Bookmark).where(Bookmark.post_id.in_(post_ids)))
@@ -69,15 +76,18 @@ class PostService:
     async def edit_post(self, post_id: str, post_data: PostEdit, session: AsyncSession) -> Posts:
         try:
             post = await self.get_post_by_id(post_id, session)
-            if post:
-                for key, value in post_data.model_dump().items():
-                    if value is not None:
-                        setattr(post, key, value)
-                await session.commit()
-                await session.refresh(post)
-                return post
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Post not found")
+            for key, value in post_data.model_dump(exclude={"tags"}, exclude_none=True).items():
+                setattr(post, key, value)
+            if post_data.tags is not None:
+                await self.tag_service.set_post_tags(post.id, post_data.tags, session)
+            post.updated_at = datetime.now()
+            await session.commit()
+            await session.refresh(post)
+            return post
         
+        except HTTPException:
+            await session.rollback()
+            raise
         except Exception as e:
             await session.rollback()
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Error editing post: {e}")
