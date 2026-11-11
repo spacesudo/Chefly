@@ -6,7 +6,8 @@ from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from api.communities.access import ensure_can_view_post
-from api.db.models import Posts, Votes, VoteType
+from api.db.models import NotificationType, Posts, Votes, VoteType
+from api.notifications.service import NotificationService
 from api.posts.algorithm import safe_record_interaction
 from api.posts.service import PostService
 
@@ -16,6 +17,7 @@ from .schemas import VoteCreate, VoteResponse
 class VoteService:
     
     post_service = PostService()
+    notification_service = NotificationService()
 
     async def _record_vote_interaction(
         self, user_id: UUID, post: Posts, vote_type: VoteType, session: AsyncSession
@@ -28,6 +30,11 @@ class VoteService:
             author_id=post.author_id,
             tags=await self.post_service.tag_service.get_tag_names(post.id, session),
         )
+        if vote_type == VoteType.UPVOTE:
+            await self.notification_service.notify(post.author_id, NotificationType.UPVOTE, user_id, post_id=post.id)
+
+    async def _retract_upvote_notification(self, user_id: UUID, post: Posts) -> None:
+        await self.notification_service.retract(post.author_id, NotificationType.UPVOTE, user_id, post_id=post.id)
     
     async def create_vote(self, vote_data: VoteCreate, session: AsyncSession) -> Votes:
         try:
@@ -64,6 +71,8 @@ class VoteService:
                 await session.commit()
                 await session.refresh(existing_vote)
                 await session.refresh(post)
+                if old_vote_type == VoteType.UPVOTE:
+                    await self._retract_upvote_notification(vote_data.user_id, post)
                 await self._record_vote_interaction(
                     vote_data.user_id, post, vote_data.vote_type, session
                 )
@@ -127,6 +136,8 @@ class VoteService:
                         author_id=post.author_id,
                         tags=await self.post_service.tag_service.get_tag_names(post.id, session),
                     )
+                    if vote.vote_type == VoteType.UPVOTE:
+                        await self._retract_upvote_notification(vote.user_id, post)
                 await session.delete(vote)
                 await session.commit()
         except Exception as e:

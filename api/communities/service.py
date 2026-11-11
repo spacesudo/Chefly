@@ -19,9 +19,11 @@ from api.db.models import (
     CommunityMember,
     CommunityRole,
     JoinRequestStatus,
+    NotificationType,
     Posts,
     User,
 )
+from api.notifications.service import NotificationService
 from api.posts.schemas import PostCreate
 from api.posts.service import PostService
 
@@ -50,6 +52,7 @@ async def _handle_errors(session: AsyncSession, action: str):
 class CommunityService:
 
     post_service = PostService()
+    notification_service = NotificationService()
 
     async def _require_role(self, community_id: UUID, user_id: UUID, session: AsyncSession, roles: set[CommunityRole]) -> CommunityMember:
         member = await get_membership(community_id, user_id, session)
@@ -68,11 +71,13 @@ class CommunityService:
         community.members_count += 1
         return member
 
-    async def _usernames(self, user_ids: list[UUID], session: AsyncSession) -> dict[UUID, str]:
-        if not user_ids:
-            return {}
-        result = await session.execute(select(User.id, User.username).where(User.id.in_(user_ids)))
-        return {uid: username for uid, username in result.all()}
+    async def _manager_ids(self, community_id: UUID, session: AsyncSession) -> list[UUID]:
+        result = await session.execute(
+            select(CommunityMember.user_id).where(
+                CommunityMember.community_id == community_id, CommunityMember.role.in_(MANAGERS)
+            )
+        )
+        return list(result.scalars().all())
 
     # Communities
 
@@ -165,6 +170,9 @@ class CommunityService:
             else:
                 session.add(CommunityJoinRequest(community_id=community_id, user_id=user_id))
             await session.commit()
+            await self.notification_service.notify(
+                await self._manager_ids(community_id, session), NotificationType.JOIN_REQUEST, user_id, community_id=community_id
+            )
             return {"status": "requested", "message": "Join request sent"}
 
     async def leave_community(self, community_id: UUID, user_id: UUID, session: AsyncSession) -> None:
@@ -218,6 +226,7 @@ class CommunityService:
                 pending.status = JoinRequestStatus.APPROVED
             await session.commit()
             await session.refresh(member)
+            await self.notification_service.notify(target_id, NotificationType.ADDED_TO_COMMUNITY, actor_id, community_id=community_id)
             return member
 
     async def remove_member(self, community_id: UUID, actor_id: UUID, target_id: UUID, session: AsyncSession) -> None:
@@ -246,9 +255,12 @@ class CommunityService:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Member not found")
             if target.role == CommunityRole.OWNER:
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="The owner's role cannot be changed")
+            promoted = role == CommunityRole.ADMIN and target.role != CommunityRole.ADMIN
             target.role = role
             await session.commit()
             await session.refresh(target)
+            if promoted:
+                await self.notification_service.notify(target_id, NotificationType.PROMOTED_TO_ADMIN, actor_id, community_id=community_id)
             return target
 
     # Join requests
@@ -286,6 +298,8 @@ class CommunityService:
                 request.status = JoinRequestStatus.REJECTED
             await session.commit()
             await session.refresh(request)
+            if approve:
+                await self.notification_service.notify(request.user_id, NotificationType.JOIN_APPROVED, actor_id, community_id=community_id)
             return request
 
     # Posts

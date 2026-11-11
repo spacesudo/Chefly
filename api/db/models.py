@@ -3,7 +3,7 @@ from enum import Enum
 from typing import List, Optional
 from uuid import UUID, uuid4
 
-from sqlalchemy import ForeignKey, UniqueConstraint, text
+from sqlalchemy import ForeignKey, Index, UniqueConstraint, text
 import sqlalchemy.dialects.postgresql as pg
 from sqlmodel import Column, Field, Relationship, SQLModel
 
@@ -20,6 +20,16 @@ class JoinRequestStatus(str, Enum):
     PENDING = "pending"
     APPROVED = "approved"
     REJECTED = "rejected"
+
+class NotificationType(str, Enum):
+    FOLLOW = "follow"
+    UPVOTE = "upvote"
+    COMMENT = "comment"
+    REPLY = "reply"
+    JOIN_REQUEST = "join_request"
+    JOIN_APPROVED = "join_approved"
+    ADDED_TO_COMMUNITY = "added_to_community"
+    PROMOTED_TO_ADMIN = "promoted_to_admin"
 
 class Follows(SQLModel, table=True):
     __tablename__ = "follows"
@@ -209,6 +219,128 @@ class PostTag(SQLModel, table=True):
     )
     tag_id: UUID = Field(
         sa_column=Column(pg.UUID(as_uuid=True), ForeignKey("tags.id"), primary_key=True, index=True)
+    )
+
+
+class Notification(SQLModel, table=True):
+    __tablename__ = "notifications"
+    id: UUID = Field(
+        sa_column=Column(pg.UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")),
+        default_factory=uuid4
+    )
+    recipient_id: UUID = Field(
+        sa_column=Column(pg.UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    )
+    actor_id: Optional[UUID] = Field(
+        sa_column=Column(pg.UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=True),
+        default=None
+    )
+    type: NotificationType = Field(
+        sa_column=Column(pg.ENUM(NotificationType, name="notification_type", create_type=True), nullable=False, index=True)
+    )
+    post_id: Optional[UUID] = Field(
+        sa_column=Column(pg.UUID(as_uuid=True), ForeignKey("posts.id", ondelete="CASCADE"), nullable=True, index=True),
+        default=None
+    )
+    comment_id: Optional[UUID] = Field(
+        sa_column=Column(pg.UUID(as_uuid=True), ForeignKey("comments.id", ondelete="CASCADE"), nullable=True),
+        default=None
+    )
+    community_id: Optional[UUID] = Field(
+        sa_column=Column(pg.UUID(as_uuid=True), ForeignKey("communities.id", ondelete="CASCADE"), nullable=True, index=True),
+        default=None
+    )
+    actor_count: int = Field(sa_column=Column(pg.INTEGER, nullable=False, server_default="1"), default=1)
+    is_read: bool = Field(sa_column=Column(pg.BOOLEAN, nullable=False, server_default="false", index=True), default=False)
+    created_at: datetime = Field(
+        sa_column=Column(pg.TIMESTAMP(timezone=True), nullable=False, server_default=text("CURRENT_TIMESTAMP")),
+        default_factory=datetime.now
+    )
+    updated_at: datetime = Field(
+        sa_column=Column(pg.TIMESTAMP(timezone=True), nullable=False, server_default=text("CURRENT_TIMESTAMP"), index=True),
+        default_factory=datetime.now
+    )
+
+
+class NotificationActor(SQLModel, table=True):
+    """Who is counted in a grouped notification, so each user counts once and can be removed on undo."""
+    __tablename__ = "notification_actors"
+    notification_id: UUID = Field(
+        sa_column=Column(pg.UUID(as_uuid=True), ForeignKey("notifications.id", ondelete="CASCADE"), primary_key=True)
+    )
+    user_id: UUID = Field(
+        sa_column=Column(pg.UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), primary_key=True, index=True)
+    )
+    created_at: datetime = Field(
+        sa_column=Column(pg.TIMESTAMP(timezone=True), nullable=False, server_default=text("CURRENT_TIMESTAMP")),
+        default_factory=datetime.now
+    )
+
+
+class Conversation(SQLModel, table=True):
+    """A 1-to-1 DM. `dm_key` is "<smaller user id>:<larger user id>" so each pair has one conversation."""
+    __tablename__ = "conversations"
+    id: UUID = Field(
+        sa_column=Column(pg.UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")),
+        default_factory=uuid4
+    )
+    dm_key: str = Field(sa_column=Column(pg.VARCHAR(73), nullable=False, unique=True, index=True))
+    last_message_at: Optional[datetime] = Field(
+        sa_column=Column(pg.TIMESTAMP(timezone=True), nullable=True, index=True),
+        default=None
+    )
+    created_at: datetime = Field(
+        sa_column=Column(pg.TIMESTAMP(timezone=True), nullable=False, server_default=text("CURRENT_TIMESTAMP")),
+        default_factory=datetime.now
+    )
+
+
+class ConversationParticipant(SQLModel, table=True):
+    __tablename__ = "conversation_participants"
+    conversation_id: UUID = Field(
+        sa_column=Column(pg.UUID(as_uuid=True), ForeignKey("conversations.id", ondelete="CASCADE"), primary_key=True)
+    )
+    user_id: UUID = Field(
+        sa_column=Column(pg.UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), primary_key=True, index=True)
+    )
+    # False = the conversation sits in this user's message-requests inbox
+    is_accepted: bool = Field(sa_column=Column(pg.BOOLEAN, nullable=False, server_default="true"), default=True)
+    last_read_at: Optional[datetime] = Field(
+        sa_column=Column(pg.TIMESTAMP(timezone=True), nullable=True),
+        default=None
+    )
+    created_at: datetime = Field(
+        sa_column=Column(pg.TIMESTAMP(timezone=True), nullable=False, server_default=text("CURRENT_TIMESTAMP")),
+        default_factory=datetime.now
+    )
+
+
+class Message(SQLModel, table=True):
+    __tablename__ = "messages"
+    __table_args__ = (Index("ix_messages_conversation_created", "conversation_id", "created_at"),)
+    id: UUID = Field(
+        sa_column=Column(pg.UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")),
+        default_factory=uuid4
+    )
+    conversation_id: UUID = Field(
+        sa_column=Column(pg.UUID(as_uuid=True), ForeignKey("conversations.id", ondelete="CASCADE"), nullable=False)
+    )
+    sender_id: UUID = Field(
+        sa_column=Column(pg.UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    )
+    content: Optional[str] = Field(sa_column=Column(pg.TEXT, nullable=True), default=None)
+    shared_post_id: Optional[UUID] = Field(
+        sa_column=Column(pg.UUID(as_uuid=True), ForeignKey("posts.id", ondelete="SET NULL"), nullable=True),
+        default=None
+    )
+    is_deleted: bool = Field(sa_column=Column(pg.BOOLEAN, nullable=False, server_default="false"), default=False)
+    created_at: datetime = Field(
+        sa_column=Column(pg.TIMESTAMP(timezone=True), nullable=False, server_default=text("CURRENT_TIMESTAMP")),
+        default_factory=datetime.now
+    )
+    edited_at: Optional[datetime] = Field(
+        sa_column=Column(pg.TIMESTAMP(timezone=True), nullable=True),
+        default=None
     )
 
 

@@ -160,6 +160,89 @@ Tags are normalized: lowercased, `#` stripped, spaces/underscores become `-`, ot
 - `GET /tags/search?q=` - Prefix search for autocomplete (public)
 - `GET /tags/{name}/posts` - Posts with a tag, newest first (authenticated; respects private communities)
 
+### Notifications (`/notifications`)
+Stored in PostgreSQL and pushed live over the [WebSocket](#realtime-websocket-ws). You never get notified about your own actions.
+
+| Type | Recipient | Trigger |
+|------|-----------|---------|
+| `follow` | Followed user | Someone follows you |
+| `upvote` | Post author | Upvote on your post. **Grouped**: while unread, further upvotes update one notification ("chi and 3 others upvoted…"). Each user counts once; undoing an upvote (switching to downvote or deleting the vote) removes them, and a group left empty is deleted |
+| `comment` | Post author | Comment or reply on your post |
+| `reply` | Parent comment author | Reply to your comment |
+| `join_request` | Community owner + admins | Someone requests to join a private community |
+| `join_approved` | Requester | Join request approved |
+| `added_to_community` | Added user | An owner/admin adds you directly |
+| `promoted_to_admin` | Promoted user | Owner makes you an admin |
+
+- `GET /notifications/` - List notifications, newest activity first (`unread_only`, `limit`, `offset`). Each includes a ready-to-display `message`, `actor`, `actor_count`, and `post` / `comment_id` / `community` references
+- `GET /notifications/unread-count` - Unread badge count
+- `POST /notifications/{notification_id}/read` - Mark one as read
+- `POST /notifications/read-all` - Mark all as read
+- `DELETE /notifications/{notification_id}` - Delete one
+
+Live events: `notification` (new or updated; grouped upvotes re-send the same `id`, so upsert by `id`) and `notification.removed` (`{"id"}`, when an upvote group becomes empty).
+
+Notifications are written in their own DB session after the triggering action commits, and are best-effort: a notification failure is logged and never fails the request. They are deleted automatically (FK cascade) when their post, comment, community, or user is deleted.
+
+### Chat (`/chats`)
+1-to-1 direct messages. All endpoints are authenticated.
+
+**Message requests**: when you start a DM with someone who doesn't follow you, it lands in their *requests* inbox. They can accept it, reply (which accepts it), or decline it (deletes the conversation; the sender isn't told). DMs to people who follow you go straight to their inbox. Conversations with no messages yet are hidden from both inboxes.
+
+- `POST /chats/` - Start or get the DM with a user (`{"user_id"}`)
+- `GET /chats/` - Inbox, most recent first (`?requests=true` for message requests; `limit`, `offset`). Each conversation includes the other user, last message preview, `unread_count`, `is_accepted` (yours), `other_accepted`, and read receipts (`my_last_read_at`, `other_last_read_at`)
+- `GET /chats/unread-count` - `{"unread_conversations", "requests"}`
+- `GET /chats/{conversation_id}` - One conversation
+- `POST /chats/{conversation_id}/accept` - Accept a message request
+- `DELETE /chats/{conversation_id}/request` - Decline a message request
+- `POST /chats/{conversation_id}/read` - Mark read up to the latest message (sends a read receipt)
+- `GET /chats/{conversation_id}/messages` - Messages, newest first (`limit` up to 100; page back with `before=<created_at of oldest message you have>`)
+- `POST /chats/{conversation_id}/messages` - Send (`content` up to 4000 chars and/or `shared_post_id`)
+- `PUT /chats/{conversation_id}/messages/{message_id}` - Edit your message (sets `edited_at`)
+- `DELETE /chats/{conversation_id}/messages/{message_id}` - Delete your message (stays in the timeline as `is_deleted` with content removed)
+
+**Shared posts**: messages can carry a post, returned as `shared_post` (id, title, author, tags). You can only share posts you can see; if the recipient can't see it (e.g. a private community they're not in), they get `shared_post_unavailable: true` instead of the preview.
+
+**Read receipts**: your messages with `created_at <= other_last_read_at` have been seen.
+
+### Realtime WebSocket (`/ws`)
+One connection per client carries notifications and chat. Connect with `ws://host/ws?token=<access token>` (browsers can't set headers on WebSockets) or an `Authorization: Bearer` header. Invalid tokens are rejected with close code 1008. Events fan out through Redis pub/sub (`events:{user_id}`), so every open device of a user receives them and it works across multiple server processes.
+
+Every frame is JSON: `{"type": "...", "data": {...}}`.
+
+| Server → client | `data` |
+|---|---|
+| `ready` | `{"user_id", "unread_notifications", "chat": {"unread_conversations", "requests"}}`, sent on connect |
+| `notification` / `notification.removed` | Notification JSON / `{"id"}` |
+| `chat.message` | `{"message": Message, "is_request"}`, also sent to the sender's other devices |
+| `chat.message_updated` / `chat.message_deleted` | Message / `{"id", "conversation_id"}` |
+| `chat.read` | `{"conversation_id", "user_id", "last_read_at"}` |
+| `chat.typing` | `{"conversation_id", "user_id"}` (not stored; show for a few seconds) |
+| `chat.request_accepted` / `chat.conversation_removed` | `{"conversation_id", ...}` |
+| `ack` | `{"client_id", "message"}`, reply to `send_message` |
+| `error` | `{"type", "client_id", "status", "detail"}` |
+| `pong` | `{}` |
+
+| Client → server | Fields |
+|---|---|
+| `ping` | - |
+| `typing` | `conversation_id` (throttle to ~1 per 3s) |
+| `read` | `conversation_id` |
+| `send_message` | `conversation_id`, `content` and/or `shared_post_id`, optional `client_id` echoed in the `ack`/`error` |
+
+Messages can also be sent with REST; both paths broadcast the same `chat.message` event. Deduplicate by message `id`. When the access token expires, the next client frame gets an `error` (401) and the socket closes, so reconnect with a fresh token.
+
+```js
+const ws = new WebSocket(`wss://api.chefly.app/ws?token=${accessToken}`);
+ws.onmessage = ({ data }) => {
+  const { type, data: payload } = JSON.parse(data);
+  if (type === "notification") upsertNotification(payload);
+  if (type === "chat.message") addMessage(payload.message);
+  if (type === "chat.typing") showTyping(payload.conversation_id);
+};
+ws.send(JSON.stringify({ type: "send_message", conversation_id, content: "Hi!", client_id: crypto.randomUUID() }));
+```
+
 ### Bookmarks (`/bookmarks`)
 - `GET /bookmarks/` - Get your bookmarked posts, newest first (authenticated; `limit`/`offset`)
 - `POST /bookmarks/posts/{post_id}` - Bookmark a post (authenticated; idempotent)
@@ -321,6 +404,9 @@ chefly/
 │   ├── follows/             # Follow system module
 │   ├── bookmarks/           # Bookmarks module
 │   ├── tags/                # Tags: normalization, starter list, trending/search
+│   ├── notifications/       # Notifications: storage, grouping
+│   ├── chat/                # DMs: message requests, read receipts, shared posts
+│   ├── realtime/            # /ws WebSocket + per-user Redis event bus
 │   ├── communities/         # Communities, membership, join requests
 │   │   └── access.py        # Shared visibility/membership rules
 │   └── db/
@@ -390,7 +476,7 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 - [ ] Recipe ingredient and instruction parsing
 - [ ] Image upload support
 - [ ] Search functionality
-- [ ] Notifications system
+- [x] Notifications system
 - [ ] User profiles and bio
 - [x] Bookmarks
 - [ ] Recipe collections

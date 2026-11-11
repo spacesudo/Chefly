@@ -63,6 +63,19 @@ class AccessTokenBearer(TokenBearer):
         if token_data.get("exp") < datetime.now().timestamp():
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Token expired")
         
+async def authenticate_access_token(token: Optional[str]) -> dict:
+    """Validate a raw access token (for clients like EventSource that cannot send an Authorization header)."""
+    if not token:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
+    token_data = decode_token(token)
+    if token_data is None:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Invalid token or expired")
+    if await is_jwt_blacklisted(token_data.get("jti")):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Token is Expired or Revoked")
+    AccessTokenBearer().verify_token_data(token_data)
+    return token_data
+
+
 class RefreshTokenBearer(TokenBearer):
     def verify_token_data(self, token_data: dict) -> None:
         if token_data and not token_data.get("refresh"):

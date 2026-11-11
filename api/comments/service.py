@@ -7,7 +7,8 @@ from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from api.communities.access import ensure_can_participate, ensure_can_view_post
-from api.db.models import Comments, Posts
+from api.db.models import Comments, NotificationType, Posts
+from api.notifications.service import NotificationService
 from api.posts.algorithm import safe_record_interaction
 from api.posts.service import PostService
 
@@ -16,9 +17,11 @@ from .schemas import CommentCreate, CommentEdit, CommentResponse
 class CommentService:
     
     post_service = PostService()
+    notification_service = NotificationService()
     
     async def create_comment(self, comment_data: CommentCreate, session: AsyncSession) -> Comments:
         try:
+            parent_comment = None
             if comment_data.parent_id:
                 parent_comment = await self.get_comment_by_id(comment_data.parent_id, session)
                 if not parent_comment:
@@ -47,6 +50,7 @@ class CommentService:
                     author_id=post.author_id,
                     tags=await self.post_service.tag_service.get_tag_names(post.id, session),
                 )
+                await self._notify_comment(new_comment, post, parent_comment)
 
             return new_comment
         
@@ -56,6 +60,14 @@ class CommentService:
         except Exception as e:
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Error creating comment: {e}")
         
+    async def _notify_comment(self, comment: Comments, post: Posts, parent: Comments | None) -> None:
+        """Reply -> parent comment's author; post author gets a comment notification unless they're the one replied to."""
+        refs = dict(post_id=post.id, comment_id=comment.id)
+        if parent:
+            await self.notification_service.notify(parent.user_id, NotificationType.REPLY, comment.user_id, **refs)
+        if not parent or parent.user_id != post.author_id:
+            await self.notification_service.notify(post.author_id, NotificationType.COMMENT, comment.user_id, **refs)
+
     async def ensure_can_view(self, post_id: UUID, user_id: UUID, session: AsyncSession) -> None:
         post = await self.post_service.get_post_by_id(str(post_id), session)
         await ensure_can_view_post(post, user_id, session)

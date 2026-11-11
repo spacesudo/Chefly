@@ -12,9 +12,9 @@ async def init_db():
     async with async_engine.begin() as conn:
         await conn.run_sync(SQLModel.metadata.create_all)
         
+async_session_maker = async_sessionmaker(bind=async_engine, class_=AsyncSession, expire_on_commit=False)
+
 async def get_session() -> AsyncGenerator[AsyncSession, None]:
-    async_session = async_sessionmaker(bind= async_engine, class_=AsyncSession, expire_on_commit=False)
-    
-    async with async_session() as session:
+    async with async_session_maker() as session:
         yield session
         

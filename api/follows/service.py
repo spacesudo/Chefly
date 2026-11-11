@@ -6,12 +6,14 @@ from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from api.auth.service import UserService
-from api.db.models import Follows, User
+from api.db.models import Follows, NotificationType, User
+from api.notifications.service import NotificationService
 from api.posts.algorithm import safe_record_interaction
 
 class FollowService:
     
     user_service = UserService()
+    notification_service = NotificationService()
     
     async def follow_user(self, follower_id: UUID, following_id: UUID, session: AsyncSession) -> Follows:
         try:
@@ -59,6 +61,7 @@ class FollowService:
                 interaction_type="follows",
                 author_id=following_id,
             )
+            await self.notification_service.notify(following_id, NotificationType.FOLLOW, follower_id)
 
             return new_follow
         

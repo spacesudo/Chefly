@@ -9,6 +9,9 @@ from api.follows.routes import router as follows_router
 from api.bookmarks.routes import router as bookmarks_router
 from api.communities.routes import router as communities_router
 from api.tags.routes import router as tags_router
+from api.notifications.routes import router as notifications_router
+from api.chat.routes import router as chat_router
+from api.realtime.routes import router as realtime_router
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -31,3 +34,6 @@ app.include_router(follows_router)
 app.include_router(bookmarks_router)
 app.include_router(communities_router)
 app.include_router(tags_router)
+app.include_router(notifications_router)
+app.include_router(chat_router)
+app.include_router(realtime_router)
