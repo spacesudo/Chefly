@@ -1,12 +1,10 @@
-from logging import Logger
 import logging
-from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, status
 from fastapi.responses import JSONResponse
 from sqlmodel.ext.asyncio.session import AsyncSession
 
-from api.auth.dependencies import AccessTokenBearer
+from api.auth.dependencies import AccessTokenBearer, get_current_user_id, parse_uuid
 from api.db.main import get_session
 from api.follows.service import FollowService
 
@@ -21,8 +19,8 @@ async def follow_user(
     session: AsyncSession = Depends(get_session),
     token_details: dict = Depends(AccessTokenBearer())
 ):
-    follower_id = UUID(token_details["user"]["user_id"])
-    following_id = UUID(user_id)
+    follower_id = get_current_user_id(token_details)
+    following_id = parse_uuid(user_id, "user")
     
     follow = await follow_service.follow_user(follower_id, following_id, session)
     return {"message": "Successfully followed user", "follow": follow}
@@ -33,8 +31,8 @@ async def unfollow_user(
     session: AsyncSession = Depends(get_session),
     token_details: dict = Depends(AccessTokenBearer())
 ):
-    follower_id = UUID(token_details["user"]["user_id"])
-    following_id = UUID(user_id)
+    follower_id = get_current_user_id(token_details)
+    following_id = parse_uuid(user_id, "user")
     
     await follow_service.unfollow_user(follower_id, following_id, session)
     return JSONResponse(
@@ -49,7 +47,7 @@ async def get_followers(
     user_id: str,
     session: AsyncSession = Depends(get_session)
 ):
-    user_uuid = UUID(user_id)
+    user_uuid = parse_uuid(user_id, "user")
     followers = await follow_service.get_followers(user_uuid, session)
     return followers
 
@@ -58,7 +56,7 @@ async def get_following(
     user_id: str,
     session: AsyncSession = Depends(get_session)
 ):
-    user_uuid = UUID(user_id)
+    user_uuid = parse_uuid(user_id, "user")
     following = await follow_service.get_following(user_uuid, session)
     return following
 
@@ -68,8 +66,8 @@ async def get_follow_status(
     session: AsyncSession = Depends(get_session),
     token_details: dict = Depends(AccessTokenBearer())
 ):
-    follower_id = UUID(token_details["user"]["user_id"])
-    following_id = UUID(user_id)
+    follower_id = get_current_user_id(token_details)
+    following_id = parse_uuid(user_id, "user")
     follow_status = await follow_service.get_follow_status(follower_id, following_id, session)
     return {"follow_status": follow_status}
 
@@ -87,7 +85,7 @@ async def get_followers_count(
     user_id: str,
     session: AsyncSession = Depends(get_session)
 ):
-    user_uuid = UUID(user_id)
+    user_uuid = parse_uuid(user_id, "user")
     followers_count = await follow_service.get_followers_count(user_uuid, session)
     return {"followers_count": followers_count}
 
@@ -96,7 +94,7 @@ async def get_following_count(
     user_id: str,
     session: AsyncSession = Depends(get_session)
 ):
-    user_uuid = UUID(user_id)
+    user_uuid = parse_uuid(user_id, "user")
     following_count = await follow_service.get_following_count(user_uuid, session)
     return {"following_count": following_count}
 
@@ -105,7 +103,7 @@ async def get_followers_usernames(
     user_id: str,
     session: AsyncSession = Depends(get_session)
 ):
-    user_uuid = UUID(user_id)
+    user_uuid = parse_uuid(user_id, "user")
     followers_usernames = await follow_service.get_follower_usernames(user_uuid, session)
     return {"followers_usernames": followers_usernames}
 
@@ -114,7 +112,7 @@ async def get_following_usernames(
     user_id: str,
     session: AsyncSession = Depends(get_session)
 ):
-    user_uuid = UUID(user_id)
+    user_uuid = parse_uuid(user_id, "user")
     following_usernames = await follow_service.get_following_usernames(user_uuid, session)
     return {"following_usernames": following_usernames}
 

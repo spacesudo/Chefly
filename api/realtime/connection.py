@@ -14,12 +14,14 @@ import logging
 from datetime import datetime
 from uuid import UUID
 
-from fastapi import HTTPException, WebSocket, WebSocketDisconnect, status
+from fastapi import WebSocket, WebSocketDisconnect, status
 from pydantic import ValidationError
 
 from api.chat.schemas import MessageCreate
 from api.chat.service import ChatService
+from api.config import Config
 from api.db.redis import redis_client
+from api.errors import ChefLyException, InternalServerError, InvalidSocketMessage, InvalidToken, UnknownSocketMessage
 from api.notifications.service import NotificationService
 from api.realtime.events import envelope, publish, user_channel
 
@@ -82,7 +84,7 @@ class RealtimeConnection:
         while True:
             raw = await self.websocket.receive_text()
             if datetime.now().timestamp() >= self.token_expires_at:
-                await self.send("error", {"status": 401, "detail": "Token expired, reconnect with a new token"})
+                await self._error({}, InvalidToken("Your token has expired", "Reconnect with a fresh access token"))
                 await self.websocket.close(code=status.WS_1008_POLICY_VIOLATION)
                 return
             msg: dict = {}
@@ -90,18 +92,29 @@ class RealtimeConnection:
                 msg = json.loads(raw)
                 handler = self.handlers.get(msg.get("type"))
                 if not handler:
-                    raise HTTPException(status_code=400, detail=f"Unknown message type: {msg.get('type')}")
+                    raise UnknownSocketMessage(f"Unknown message type: {msg.get('type')}")
                 await handler(msg)
-            except HTTPException as e:
-                await self._error(msg, e.status_code, e.detail)
+            except ChefLyException as e:
+                await self._error(msg, e)
             except ValidationError as e:
-                await self._error(msg, 422, e.errors(include_url=False, include_context=False))
+                details = [{"field": ".".join(map(str, err["loc"])), "message": err["msg"]} for err in e.errors()]
+                error = InvalidSocketMessage(f"Invalid {details[0]['field']}: {details[0]['message']}", "Fix the listed fields and try again")
+                await self._error(msg, error, status=422, details=details)
             except (ValueError, KeyError, TypeError, AttributeError):
-                await self._error(msg, 400, "Invalid message")
+                await self._error(msg, InvalidSocketMessage())
+            except Exception as e:
+                logger.exception("Unhandled error in WebSocket handler")
+                await self._error(msg, InternalServerError(), debug=f"{type(e).__name__}: {e}" if Config.DEBUG else None)
 
-    async def _error(self, msg: dict, code: int, detail) -> None:
+    async def _error(self, msg: dict, error: ChefLyException, status: int | None = None, details: list | None = None, debug: str | None = None) -> None:
+        """Same body as REST errors, plus the originating message `type` and `client_id` so clients can match it up."""
         payload = msg if isinstance(msg, dict) else {}
-        await self.send("error", {"type": payload.get("type"), "client_id": payload.get("client_id"), "status": code, "detail": detail})
+        body = {"type": payload.get("type"), "client_id": payload.get("client_id"), "status": status or error.status_code, **error.to_dict()}
+        if details:
+            body["details"] = details
+        if debug:
+            body["debug"] = debug
+        await self.send("error", body)
 
     # Handlers
 

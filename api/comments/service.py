@@ -1,13 +1,13 @@
 from typing import List
 from uuid import UUID
 
-from fastapi import HTTPException, status
 from sqlalchemy.orm.attributes import set_committed_value
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from api.communities.access import ensure_can_participate, ensure_can_view_post
 from api.db.models import Comments, NotificationType, Posts
+from api.errors import CommentNotFound, NotCommentAuthor, ParentCommentMismatch, ParentCommentNotFound
 from api.notifications.service import NotificationService
 from api.posts.algorithm import safe_record_interaction
 from api.posts.service import PostService
@@ -20,45 +20,33 @@ class CommentService:
     notification_service = NotificationService()
     
     async def create_comment(self, comment_data: CommentCreate, session: AsyncSession) -> Comments:
-        try:
-            parent_comment = None
-            if comment_data.parent_id:
+        parent_comment = None
+        if comment_data.parent_id:
+            try:
                 parent_comment = await self.get_comment_by_id(comment_data.parent_id, session)
-                if not parent_comment:
-                    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Parent comment not found")
-                if parent_comment.post_id != comment_data.post_id:
-                    raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Parent comment does not belong to the same post")
-            post = await self.post_service.get_post_by_id(
-                str(comment_data.post_id), session
-            )
-            await ensure_can_participate(post, comment_data.user_id, session)
-            if post:
-                post.comment_count += 1
-                await session.commit()
-                await session.refresh(post)
-                
-            new_comment = Comments(**comment_data.model_dump())
-            session.add(new_comment)
-            await session.commit()
-            await session.refresh(new_comment)
+            except CommentNotFound:
+                raise ParentCommentNotFound()
+            if parent_comment.post_id != comment_data.post_id:
+                raise ParentCommentMismatch()
+        post = await self.post_service.get_post_by_id(str(comment_data.post_id), session)
+        await ensure_can_participate(post, comment_data.user_id, session)
 
-            if post:
-                await safe_record_interaction(
-                    user_id=new_comment.user_id,
-                    post_id=post.id,
-                    interaction_type="comments",
-                    author_id=post.author_id,
-                    tags=await self.post_service.tag_service.get_tag_names(post.id, session),
-                )
-                await self._notify_comment(new_comment, post, parent_comment)
+        new_comment = Comments(**comment_data.model_dump())
+        session.add(new_comment)
+        post.comment_count += 1
+        await session.commit()
+        await session.refresh(new_comment)
+        await session.refresh(post)
 
-            return new_comment
-        
-        except HTTPException:
-            await session.rollback()
-            raise
-        except Exception as e:
-            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Error creating comment: {e}")
+        await safe_record_interaction(
+            user_id=new_comment.user_id,
+            post_id=post.id,
+            interaction_type="comments",
+            author_id=post.author_id,
+            tags=await self.post_service.tag_service.get_tag_names(post.id, session),
+        )
+        await self._notify_comment(new_comment, post, parent_comment)
+        return new_comment
         
     async def _notify_comment(self, comment: Comments, post: Posts, parent: Comments | None) -> None:
         """Reply -> parent comment's author; post author gets a comment notification unless they're the one replied to."""
@@ -144,16 +132,10 @@ class CommentService:
         return list(replies)
     
     async def get_comment_by_id(self, comment_id: UUID, session: AsyncSession) -> Comments:
-        try:
-            result = await session.execute(select(Comments).where(Comments.id == comment_id))
-            comment = result.scalar_one_or_none()
-            if not comment:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Comment not found")
-            return comment
-        except HTTPException:
-            raise
-        except Exception as e:
-            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Error getting comment: {e}")
+        comment = (await session.execute(select(Comments).where(Comments.id == comment_id))).scalar_one_or_none()
+        if not comment:
+            raise CommentNotFound()
+        return comment
 
     async def edit_comment(
         self, 
@@ -162,27 +144,14 @@ class CommentService:
         user_id: UUID,  
         session: AsyncSession
     ) -> Comments:
-        try:
-            comment = await self.get_comment_by_id(comment_id, session)
-            
-            if comment.user_id != user_id:
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN, 
-                    detail="You are not the author of this comment"
-                )
-            
-            if comment_data.content is not None:
-                comment.content = comment_data.content
-            
-            await session.commit()
-            await session.refresh(comment)
-            return comment
-        
-        except HTTPException:
-            raise
-        except Exception as e:
-            await session.rollback()
-            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Error editing comment: {e}")
+        comment = await self.get_comment_by_id(comment_id, session)
+        if comment.user_id != user_id:
+            raise NotCommentAuthor()
+        if comment_data.content is not None:
+            comment.content = comment_data.content
+        await session.commit()
+        await session.refresh(comment)
+        return comment
 
     async def delete_comment(
         self, 
@@ -190,20 +159,8 @@ class CommentService:
         user_id: UUID,
         session: AsyncSession
     ) -> None:
-        try:
-            comment = await self.get_comment_by_id(comment_id, session)
-            
-            if comment.user_id != user_id:
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail="You are not the author of this comment"
-                )
-            
-            comment.is_deleted = True
-            await session.commit()
-        except HTTPException:
-            await session.rollback()
-            raise
-        except Exception as e:
-            await session.rollback()
-            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Error deleting comment: {e}")
+        comment = await self.get_comment_by_id(comment_id, session)
+        if comment.user_id != user_id:
+            raise NotCommentAuthor()
+        comment.is_deleted = True
+        await session.commit()

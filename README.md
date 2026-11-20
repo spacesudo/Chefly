@@ -87,6 +87,7 @@ A modern, asynchronous social media platform API for cooking recipe sharing, vot
    REDIS_HOST=localhost
    REDIS_PORT=6379
    REDIS_DB=0
+   DEBUG=false  # true adds exception text to 500 responses; never enable in production
    ```
 
 4. **Run database migrations**
@@ -135,7 +136,8 @@ Once the server is running, access the interactive API documentation:
 ### Votes (`/votes`)
 - `POST /votes/create` - Create or update a vote (authenticated)
 - `GET /votes/{vote_id}` - Get a specific vote (authenticated)
-- `GET /votes/post/{post_id}` - Get all votes for a post (authenticated)
+- `DELETE /votes/{vote_id}` - Remove your own vote (authenticated; `403 not_vote_owner` for anyone else's)
+- `GET /votes/post/{post_id}` - Get all votes for a post (authenticated; respects private communities)
 - `GET /votes/user/{user_id}` - Get all votes by a user (authenticated)
 
 ### Follows (`/follows`)
@@ -454,14 +456,32 @@ alembic downgrade -1
 
 ## Error Handling
 
-The API uses standard HTTP status codes:
-- `200` - Success
-- `201` - Created
-- `400` - Bad Request
-- `401` - Unauthorized
-- `403` - Forbidden
-- `404` - Not Found
-- `500` - Internal Server Error
+Every error, whether from the app, FastAPI itself (unknown route, missing auth header) or validation, has the same JSON body. The HTTP status code carries the class of error:
+
+```json
+{
+  "error_code": "post_not_found",
+  "message": "Post not found",
+  "resolution": "Check the post ID; the post may have been deleted"
+}
+```
+
+- `error_code` is stable and machine-readable, so branch on it in clients. `message` and `resolution` are human-readable and can change.
+- Validation errors (`422 validation_error`) also include `details`: `[{"field": "email", "message": "..."}]`.
+- Unexpected errors return `500 internal_error` with a generic message, and the real exception is logged server-side. Set `DEBUG=true` in `.env` to add a `debug` field with the exception text (development only; it can leak internals).
+- WebSocket `error` frames use the same fields plus `type`, `client_id` and `status`.
+
+| Status | Meaning | Examples |
+|---|---|---|
+| `400` | Bad input | `invalid_id`, `cannot_follow_self`, `empty_message`, `owner_cannot_leave` |
+| `401` | Not authenticated | `not_authenticated`, `invalid_token`, `revoked_token`, `access_token_required`, `invalid_credentials` |
+| `403` | Not allowed | `not_post_author`, `not_vote_owner`, `community_private`, `not_community_member`, `community_permission_denied` |
+| `404` | Doesn't exist | `post_not_found`, `comment_not_found`, `conversation_not_found`, `community_not_found` |
+| `409` | Conflicts with current state | `user_already_exists`, `already_following`, `community_name_taken`, `join_request_already_reviewed` |
+| `422` | Request body/params invalid | `validation_error` |
+| `500` | Server bug | `internal_error` |
+
+All errors are defined in `api/errors.py`. Raise them from anywhere (`raise PostNotFound()`), optionally overriding the text for one call: `raise NotCommunityMember("You must join to reply", "Join the community first")`.
 
 ## License
 

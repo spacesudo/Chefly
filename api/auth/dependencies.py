@@ -3,27 +3,27 @@ from fastapi import Request
 from typing import Optional
 from fastapi.security.http import HTTPAuthorizationCredentials
 from .utils import decode_token
-from fastapi import HTTPException, status
 from datetime import datetime
 from uuid import UUID
 from api.db.redis import add_jwt_to_blacklist, is_jwt_blacklisted
+from api.errors import AccessTokenRequired, InvalidId, InvalidToken, NotAuthenticated, RefreshTokenRequired, RevokedToken
 
 
 def get_current_user_id(token_details: dict) -> UUID:
-    user_id_str = token_details["user"]["user_id"]
+    user_id_str = (token_details.get("user") or {}).get("user_id")
     if not user_id_str:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
+        raise InvalidToken()
     try:
         return UUID(user_id_str)
     except (ValueError, TypeError):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid user ID format")
+        raise InvalidToken()
 
 
 def parse_uuid(value: str, label: str) -> UUID:
     try:
         return UUID(value)
     except (ValueError, TypeError):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Invalid {label} ID format")
+        raise InvalidId(f"Invalid {label} ID")
 
 class TokenBearer(HTTPBearer):
     def __init__(self, auto_error: bool = True):
@@ -37,10 +37,10 @@ class TokenBearer(HTTPBearer):
         token_data = decode_token(token)
         
         if not self.token_valid(token):
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Invalid token or expired")
+            raise InvalidToken()
         
         if await is_jwt_blacklisted(token_data.get("jti")):
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Token is Expired or Revoked")
+            raise RevokedToken()
         
         self.verify_token_data(token_data)
         
@@ -59,19 +59,19 @@ class AccessTokenBearer(TokenBearer):
     
     def verify_token_data(self, token_data: dict) -> None:
         if token_data and token_data.get("refresh"):
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Refresh token used")
+            raise AccessTokenRequired()
         if token_data.get("exp") < datetime.now().timestamp():
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Token expired")
+            raise InvalidToken()
         
 async def authenticate_access_token(token: Optional[str]) -> dict:
-    """Validate a raw access token (for clients like EventSource that cannot send an Authorization header)."""
+    """Validate a raw access token (for clients like browser WebSockets that cannot send an Authorization header)."""
     if not token:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
+        raise NotAuthenticated()
     token_data = decode_token(token)
     if token_data is None:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Invalid token or expired")
+        raise InvalidToken()
     if await is_jwt_blacklisted(token_data.get("jti")):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Token is Expired or Revoked")
+        raise RevokedToken()
     AccessTokenBearer().verify_token_data(token_data)
     return token_data
 
@@ -79,6 +79,6 @@ async def authenticate_access_token(token: Optional[str]) -> dict:
 class RefreshTokenBearer(TokenBearer):
     def verify_token_data(self, token_data: dict) -> None:
         if token_data and not token_data.get("refresh"):
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access token used")
+            raise RefreshTokenRequired()
         if token_data.get("exp") < datetime.now().timestamp():
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Token expired")
+            raise InvalidToken()

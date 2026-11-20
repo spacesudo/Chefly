@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, status
 from fastapi.responses import JSONResponse
 from .schemas import UserCreate, UserLogin
 from api.auth.service import UserService
@@ -9,6 +9,7 @@ from api.config import Config
 from datetime import timedelta, datetime
 from .dependencies import RefreshTokenBearer, AccessTokenBearer
 from api.db.redis import add_jwt_to_blacklist
+from api.errors import InvalidCredentials, InvalidToken, UserAlreadyExists, UserNotFound
 
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -18,7 +19,7 @@ user_service = UserService()
 async def create_user(user_data: UserCreate, session: AsyncSession = Depends(get_session)):
     email =  user_data.email
     if await user_service.user_exists(email, session):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="User already exists")
+        raise UserAlreadyExists()
     user = await user_service.create_user(user_data, session)
     return user
 
@@ -26,7 +27,11 @@ async def create_user(user_data: UserCreate, session: AsyncSession = Depends(get
 async def login(user_data: UserLogin, session: AsyncSession = Depends(get_session)):
     email = user_data.email
     password = user_data.password
-    user = await user_service.get_user_by_email(email, session)
+    try:
+        user = await user_service.get_user_by_email(email, session)
+    except UserNotFound:
+        # Same error as a wrong password, so login can't be used to check which emails have accounts
+        raise InvalidCredentials()
     if user is not None:
         password_valid = verify_password(password, user.hashed_password)
         if password_valid:
@@ -61,16 +66,16 @@ async def login(user_data: UserLogin, session: AsyncSession = Depends(get_sessio
                 status_code = status.HTTP_200_OK
             )
         else:
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
+            raise InvalidCredentials()
     else:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+        raise InvalidCredentials()
     
 @router.post("/refresh")
 async def refresh_token(token_details: dict = Depends(RefreshTokenBearer())):
     # Extract user data from the token (it's nested under 'user')
     user_data = token_details.get("user")
     if not user_data:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token structure")
+        raise InvalidToken()
     
     # Create a new access token with the user data
     access_token = create_access_token(
@@ -92,7 +97,7 @@ async def refresh_token(token_details: dict = Depends(RefreshTokenBearer())):
 async def logout(token_details: dict = Depends(AccessTokenBearer())):
     jti = token_details.get("jti")
     if not jti:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token structure")
+        raise InvalidToken()
     await add_jwt_to_blacklist(jti)
     return JSONResponse(
         content={

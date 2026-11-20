@@ -3,7 +3,6 @@ from datetime import datetime, timedelta, timezone
 from typing import Iterable, List
 from uuid import UUID
 
-from fastapi import HTTPException, status
 from sqlalchemy import delete, func, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlmodel import select
@@ -83,19 +82,16 @@ class TagService:
         return (await self.to_responses([post], session))[0]
 
     async def get_posts_by_tag(self, name: str, user_id: UUID, session: AsyncSession, limit: int = 20, offset: int = 0) -> List[Posts]:
-        try:
-            result = await session.execute(
-                select(Posts)
-                .join(PostTag, PostTag.post_id == Posts.id)
-                .join(Tag, Tag.id == PostTag.tag_id)
-                .where(Tag.name == normalize_tag(name), visible_posts_filter(user_id))
-                .order_by(Posts.created_at.desc())
-                .offset(offset)
-                .limit(limit)
-            )
-            return list(result.scalars().all())
-        except Exception as e:
-            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Error getting posts by tag: {e}")
+        result = await session.execute(
+            select(Posts)
+            .join(PostTag, PostTag.post_id == Posts.id)
+            .join(Tag, Tag.id == PostTag.tag_id)
+            .where(Tag.name == normalize_tag(name), visible_posts_filter(user_id))
+            .order_by(Posts.created_at.desc())
+            .offset(offset)
+            .limit(limit)
+        )
+        return list(result.scalars().all())
 
     async def search_tags(self, q: str, session: AsyncSession, limit: int = 10) -> List[TagResponse]:
         prefix = normalize_tag(q)

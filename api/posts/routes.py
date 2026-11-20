@@ -1,5 +1,5 @@
 from typing import List
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, status
 from fastapi.responses import JSONResponse
 from api.posts.schemas import PostCreate, PostEdit, PostResponse
 from api.posts.service import PostService
@@ -9,8 +9,7 @@ from api.db.redis import redis_client
 from sqlmodel.ext.asyncio.session import AsyncSession
 from api.auth.dependencies import AccessTokenBearer, get_current_user_id
 from api.communities.access import ensure_can_view_post
-from logging import Logger
-from uuid import UUID
+from api.errors import NotPostAuthor
 import logging
 
 logger = logging.getLogger(__name__)
@@ -21,14 +20,7 @@ tag_service = post_service.tag_service
 
 @router.post("/create")
 async def create_post(post_data: PostCreate, session: AsyncSession = Depends(get_session), token_details: dict = Depends(AccessTokenBearer())):
-    logger.info(f"Token details: {token_details}")
-    user_id = token_details["user"]["user_id"]
-    if not user_id:
-        logger.error("User not found")
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
-    
-    post_data.author_id = user_id
-        
+    post_data.author_id = str(get_current_user_id(token_details))
     post = await post_service.create_post(post_data, session)
     return await tag_service.to_response(post, session)
 
@@ -39,16 +31,7 @@ async def get_all_posts(session: AsyncSession = Depends(get_session), token_deta
 
 @router.get("/following-feed", response_model=List[PostResponse])
 async def get_following_feed(limit: int = 20, offset: int = 0, session: AsyncSession = Depends(get_session), token_details: dict = Depends(AccessTokenBearer())):
-    user_id_str = token_details["user"]["user_id"]
-    if not user_id_str:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
-    
-    try:
-        user_id = UUID(user_id_str)
-    except (ValueError, TypeError):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid user ID format")
-    
-    posts = await post_service.following_feed(user_id, session, limit, offset)
+    posts = await post_service.following_feed(get_current_user_id(token_details), session, limit, offset)
     return await tag_service.to_responses(posts, session)
 
 @router.get("/feed", response_model=List[PostResponse])
@@ -63,19 +46,10 @@ async def get_fyp_feed(
     session: AsyncSession = Depends(get_session),
     token_details: dict = Depends(AccessTokenBearer()),
 ):
-    user_id_str = token_details["user"]["user_id"]
-    if not user_id_str:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
-
-    try:
-        user_id = UUID(user_id_str)
-    except (ValueError, TypeError):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid user ID format")
-
     posts = await get_fyp_recommendations(
         redis=redis_client,
         session=session,
-        user_id=user_id,
+        user_id=get_current_user_id(token_details),
         limit=limit,
         offset=offset,
     )
@@ -89,19 +63,9 @@ async def get_post(post_id: str, session: AsyncSession = Depends(get_session), t
 
 @router.delete("/{post_id}")
 async def delete_post(post_id: str, session: AsyncSession = Depends(get_session), token_details: dict = Depends(AccessTokenBearer())):
-    user_id_str = token_details["user"]["user_id"]
-    if not user_id_str:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
-    
-    # Convert user_id string to UUID for comparison
-    try:
-        user_id = UUID(user_id_str)
-    except (ValueError, TypeError):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid user ID format")
-    
     post = await post_service.get_post_by_id(post_id, session)
-    if post.author_id != user_id:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You are not the author of this post")
+    if post.author_id != get_current_user_id(token_details):
+        raise NotPostAuthor()
     await post_service.delete_post(post_id, session)
     return JSONResponse(
         content={"message": "Post deleted successfully"},
@@ -110,19 +74,8 @@ async def delete_post(post_id: str, session: AsyncSession = Depends(get_session)
     
 @router.put("/{post_id}")
 async def edit_post(post_id: str, post_data: PostEdit, session: AsyncSession = Depends(get_session), token_details: dict = Depends(AccessTokenBearer())):
-    user_id_str = token_details["user"]["user_id"]
-    if not user_id_str:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
-    
-    # Convert user_id string to UUID for comparison
-    try:
-        user_id = UUID(user_id_str)
-    except (ValueError, TypeError):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid user ID format")
-    
     post = await post_service.get_post_by_id(post_id, session)
-    if post.author_id != user_id:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You are not the author of this post")
+    if post.author_id != get_current_user_id(token_details):
+        raise NotPostAuthor()
     post = await post_service.edit_post(post_id, post_data, session)
     return await tag_service.to_response(post, session)
-

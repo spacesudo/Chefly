@@ -5,13 +5,13 @@ from datetime import datetime
 from typing import Iterable, List
 from uuid import UUID
 
-from fastapi import HTTPException, status
 from sqlalchemy import delete, func, update
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from api.db.main import async_session_maker
 from api.db.models import Community, Notification, NotificationActor, NotificationType, Posts, User
+from api.errors import NotificationNotFound
 from api.realtime.events import publish
 
 from .schemas import NotificationActor as ActorSummary, NotificationCommunity, NotificationPost, NotificationResponse
@@ -189,14 +189,11 @@ class NotificationService:
         return responses
 
     async def get_notifications(self, user_id: UUID, session: AsyncSession, unread_only: bool = False, limit: int = 20, offset: int = 0) -> List[NotificationResponse]:
-        try:
-            query = select(Notification).where(Notification.recipient_id == user_id)
-            if unread_only:
-                query = query.where(Notification.is_read == False)
-            result = await session.execute(query.order_by(Notification.updated_at.desc()).offset(offset).limit(limit))
-            return await self.to_responses(list(result.scalars().all()), session)
-        except Exception as e:
-            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Error getting notifications: {e}")
+        query = select(Notification).where(Notification.recipient_id == user_id)
+        if unread_only:
+            query = query.where(Notification.is_read == False)
+        result = await session.execute(query.order_by(Notification.updated_at.desc()).offset(offset).limit(limit))
+        return await self.to_responses(list(result.scalars().all()), session)
 
     async def unread_count(self, user_id: UUID, session: AsyncSession) -> int:
         result = await session.execute(
@@ -207,7 +204,7 @@ class NotificationService:
     async def _get_own(self, notification_id: UUID, user_id: UUID, session: AsyncSession) -> Notification:
         notification = await session.get(Notification, notification_id)
         if not notification or notification.recipient_id != user_id:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Notification not found")
+            raise NotificationNotFound()
         return notification
 
     async def mark_read(self, notification_id: UUID, user_id: UUID, session: AsyncSession) -> None:

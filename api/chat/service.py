@@ -7,7 +7,6 @@ from datetime import datetime, timezone
 from typing import List
 from uuid import UUID
 
-from fastapi import HTTPException, status
 from sqlalchemy import and_, func
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import select
@@ -16,6 +15,16 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 from api.communities.access import ensure_can_view_post, visible_posts_filter
 from api.db.main import async_session_maker
 from api.db.models import Conversation, ConversationParticipant, Follows, Message, Posts, User
+from api.errors import (
+    CannotMessageSelf,
+    ConversationNotFound,
+    EmptyMessage,
+    MessageNotFound,
+    MessageRequestNotPending,
+    NotMessageSender,
+    PostNotFound,
+    UserNotFound,
+)
 from api.realtime.events import publish
 from api.tags.service import TagService
 
@@ -56,7 +65,7 @@ class ChatService:
         participants = {p.user_id: p for p in result.scalars().all()}
         me = participants.pop(user_id, None)
         if not me or not participants:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Conversation not found")
+            raise ConversationNotFound()
         return me, next(iter(participants.values()))
 
     async def get_peer_id(self, conversation_id: UUID, user_id: UUID, session: AsyncSession) -> UUID:
@@ -67,9 +76,9 @@ class ChatService:
         _, other = await self._participants(conversation_id, user_id, session)
         message = await session.get(Message, message_id)
         if not message or message.conversation_id != conversation_id or message.is_deleted:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Message not found")
+            raise MessageNotFound()
         if message.sender_id != user_id:
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You can only change your own messages")
+            raise NotMessageSender()
         return message, other.user_id
 
     # Serialization
@@ -165,9 +174,9 @@ class ChatService:
     async def start_conversation(self, user_id: UUID, other_id: UUID, session: AsyncSession) -> ConversationResponse:
         """Get or create the DM with `other_id`. It lands in their requests inbox unless they follow you."""
         if other_id == user_id:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="You cannot message yourself")
+            raise CannotMessageSelf()
         if not await session.get(User, other_id):
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+            raise UserNotFound()
 
         key = dm_key(user_id, other_id)
         conversation = (await session.execute(select(Conversation).where(Conversation.dm_key == key))).scalar_one_or_none()
@@ -222,7 +231,7 @@ class ChatService:
         """Deletes the conversation. The sender isn't told, so a decline looks like an unread request to them."""
         me, _ = await self._participants(conversation_id, user_id, session)
         if me.is_accepted:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Only pending message requests can be declined")
+            raise MessageRequestNotPending()
         await session.delete(await session.get(Conversation, conversation_id))
         await session.commit()
         await publish(user_id, "chat.conversation_removed", {"conversation_id": str(conversation_id)})
@@ -261,12 +270,12 @@ class ChatService:
     async def send_message(self, conversation_id: UUID, user_id: UUID, data: MessageCreate, session: AsyncSession) -> MessageResponse:
         content = (data.content or "").strip() or None
         if not content and not data.shared_post_id:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="A message needs content or a shared post")
+            raise EmptyMessage()
         me, other = await self._participants(conversation_id, user_id, session)
         if data.shared_post_id:
             post = await session.get(Posts, data.shared_post_id)
             if not post:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Post not found")
+                raise PostNotFound()
             await ensure_can_view_post(post, user_id, session)
 
         sent_at = _now()

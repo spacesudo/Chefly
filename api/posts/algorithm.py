@@ -4,7 +4,6 @@ import logging
 from typing import List
 from uuid import UUID
 
-from fastapi import HTTPException, status
 from redis.asyncio import Redis
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
@@ -119,20 +118,11 @@ async def get_fyp_recommendations(
     limit: int = 20,
     offset: int = 0,
 ) -> List[Posts]:
-    try:
-        has_interactions = await redis.exists(_user_interactions_key(user_id))
+    has_interactions = await redis.exists(_user_interactions_key(user_id))
 
-        if not has_interactions:
-            return await get_cold_start_posts(session, user_id, limit, offset)
-        return await get_personalized_posts(redis, session, user_id, limit, offset)
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error getting FYP recommendations: {e}",
-        )
+    if not has_interactions:
+        return await get_cold_start_posts(session, user_id, limit, offset)
+    return await get_personalized_posts(redis, session, user_id, limit, offset)
 
 
 async def get_popular_posts(

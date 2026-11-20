@@ -1,12 +1,10 @@
-from logging import Logger
 import logging
-from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, status
 from fastapi.responses import JSONResponse
 from sqlmodel.ext.asyncio.session import AsyncSession
 
-from api.auth.dependencies import AccessTokenBearer, get_current_user_id
+from api.auth.dependencies import AccessTokenBearer, get_current_user_id, parse_uuid
 from api.comments.schemas import CommentCreate, CommentEdit, CommentResponse
 from api.comments.service import CommentService
 from api.db.main import get_session
@@ -39,17 +37,7 @@ def convert_comment_with_replies(comment: Comments) -> CommentResponse:
 
 @router.post("/create")
 async def create_comment(comment_data: CommentCreate, session: AsyncSession = Depends(get_session), token_details: dict = Depends(AccessTokenBearer())):
-    user_id_str = token_details["user"]["user_id"]
-    if not user_id_str:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
-    
-    try:
-        user_id = UUID(user_id_str)
-    except (ValueError, TypeError):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid user ID format")
-    
-    comment_data.user_id = user_id
-        
+    comment_data.user_id = get_current_user_id(token_details)
     comment = await comment_service.create_comment(comment_data, session)
     return comment
 
@@ -59,11 +47,7 @@ async def get_comments_by_post(
     session: AsyncSession = Depends(get_session), 
     token_details: dict = Depends(AccessTokenBearer())
 ):
-    try:
-        post_uuid = UUID(post_id)
-    except (ValueError, TypeError):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid post ID format")
-    
+    post_uuid = parse_uuid(post_id, "post")
     await comment_service.ensure_can_view(post_uuid, get_current_user_id(token_details), session)
     comments = await comment_service.get_comments_by_post(post_uuid, session, include_replies=True)
     return [convert_comment_with_replies(comment) for comment in comments]
@@ -74,11 +58,7 @@ async def get_replies_to_comment(
     session: AsyncSession = Depends(get_session), 
     token_details: dict = Depends(AccessTokenBearer())
 ):
-    try:
-        comment_uuid = UUID(comment_id)
-    except (ValueError, TypeError):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid comment ID format")
-    
+    comment_uuid = parse_uuid(comment_id, "comment")
     comment = await comment_service.get_comment_by_id(comment_uuid, session)
     await comment_service.ensure_can_view(comment.post_id, get_current_user_id(token_details), session)
     replies = await comment_service.get_replies_to_comment(comment_uuid, session)
@@ -86,23 +66,13 @@ async def get_replies_to_comment(
 
 @router.get("/{comment_id}")
 async def get_comment_by_id(comment_id: str, session: AsyncSession = Depends(get_session), token_details: dict = Depends(AccessTokenBearer())):
-    comment = await comment_service.get_comment_by_id(comment_id, session)
+    comment = await comment_service.get_comment_by_id(parse_uuid(comment_id, "comment"), session)
     await comment_service.ensure_can_view(comment.post_id, get_current_user_id(token_details), session)
     return comment
 
 @router.put("/{comment_id}")
 async def edit_comment(comment_id: str, comment_data: CommentEdit, session: AsyncSession = Depends(get_session), token_details: dict = Depends(AccessTokenBearer())):
-    user_id_str = token_details["user"]["user_id"]
-    if not user_id_str:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
-    
-    # Convert user_id string to UUID for comparison
-    try:
-        user_id = UUID(user_id_str)
-    except (ValueError, TypeError):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid user ID format")
-    
-    await comment_service.edit_comment(comment_id, comment_data, user_id, session)
+    await comment_service.edit_comment(parse_uuid(comment_id, "comment"), comment_data, get_current_user_id(token_details), session)
     return JSONResponse(
         content={"message": "Comment edited successfully"},
         status_code=status.HTTP_200_OK
@@ -110,16 +80,7 @@ async def edit_comment(comment_id: str, comment_data: CommentEdit, session: Asyn
 
 @router.delete("/{comment_id}")
 async def delete_comment(comment_id: str, session: AsyncSession = Depends(get_session), token_details: dict = Depends(AccessTokenBearer())):
-    user_id_str = token_details["user"]["user_id"]
-    if not user_id_str:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
-    
-    try:
-        user_id = UUID(user_id_str)
-    except (ValueError, TypeError):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid user ID format")
-    
-    await comment_service.delete_comment(comment_id, user_id, session)
+    await comment_service.delete_comment(parse_uuid(comment_id, "comment"), get_current_user_id(token_details), session)
     return JSONResponse(
         content={"message": "Comment deleted successfully"},
         status_code=status.HTTP_200_OK

@@ -11,6 +11,8 @@ class Settings(BaseSettings):
     REDIS_HOST: str
     REDIS_PORT: int = 6379
     REDIS_DB: int = 0
+    # Include the real exception text in 500 responses. Never enable in production.
+    DEBUG: bool = False
     
     model_config = SettingsConfigDict(
         env_file=".env",

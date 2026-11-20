@@ -2,12 +2,12 @@
 
 from uuid import UUID
 
-from fastapi import HTTPException, status
 from sqlalchemy import or_
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from api.db.models import Community, CommunityMember, Posts
+from api.errors import CommunityNotFound, CommunityPrivate, NotCommunityMember
 
 
 def _private_community_ids():
@@ -31,7 +31,7 @@ async def get_community_or_404(community_id: UUID, session: AsyncSession) -> Com
     result = await session.execute(select(Community).where(Community.id == community_id))
     community = result.scalar_one_or_none()
     if not community:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Community not found")
+        raise CommunityNotFound()
     return community
 
 
@@ -47,7 +47,7 @@ async def get_membership(community_id: UUID, user_id: UUID, session: AsyncSessio
 
 async def ensure_can_view_community(community: Community, user_id: UUID, session: AsyncSession) -> None:
     if community.is_private and not await get_membership(community.id, user_id, session):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="This community is private")
+        raise CommunityPrivate()
 
 
 async def ensure_can_view_post(post: Posts, user_id: UUID, session: AsyncSession) -> None:
@@ -62,4 +62,4 @@ async def ensure_can_participate(post: Posts, user_id: UUID, session: AsyncSessi
     if post.community_id is None:
         return
     if not await get_membership(post.community_id, user_id, session):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You must be a member of this community")
+        raise NotCommunityMember("You must be a member of this community to reply", "Join the community first")

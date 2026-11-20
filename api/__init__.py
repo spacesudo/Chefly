@@ -1,5 +1,6 @@
 from fastapi import FastAPI
 from api.db.main import init_db
+from api.errors import register_error_handlers
 from contextlib import asynccontextmanager
 from api.auth.routes import router as auth_router
 from api.posts.routes import router as posts_router
@@ -21,6 +22,8 @@ async def lifespan(app: FastAPI):
 version = "v1"
 
 app = FastAPI(title="chefly", version=version, description="A simple API for a cooking recipe sharing and voting", lifespan=lifespan)
+
+register_error_handlers(app)
 
 app.get("/")(lambda: {"message": "Hello World"})
 

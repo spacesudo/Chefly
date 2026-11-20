@@ -1,8 +1,9 @@
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, WebSocket, status
+from fastapi import APIRouter, WebSocket, status
 
 from api.auth.dependencies import authenticate_access_token, get_current_user_id
+from api.errors import ChefLyException
 from api.realtime.connection import RealtimeConnection
 
 router = APIRouter(tags=["realtime"])
@@ -16,8 +17,8 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = None):
     try:
         token_data = await authenticate_access_token(raw_token)
         user_id = get_current_user_id(token_data)
-    except HTTPException:
-        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+    except ChefLyException as e:
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason=e.error_code)
         return
     await websocket.accept()
     await RealtimeConnection(websocket, user_id, token_data["exp"]).run()

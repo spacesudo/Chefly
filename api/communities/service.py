@@ -3,7 +3,6 @@ from datetime import datetime
 from typing import List
 from uuid import UUID
 
-from fastapi import HTTPException, status
 from sqlalchemy import delete, func
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
@@ -23,6 +22,22 @@ from api.db.models import (
     Posts,
     User,
 )
+from api.errors import (
+    AlreadyCommunityMember,
+    CommunityMemberNotFound,
+    CommunityNameTaken,
+    CommunityPermissionDenied,
+    CommunityPostNotFound,
+    InvalidCommunityRole,
+    JoinRequestAlreadyReviewed,
+    JoinRequestNotFound,
+    NotCommunityMember,
+    OnlyOwnerAllowed,
+    OwnerCannotBeRemoved,
+    OwnerCannotLeave,
+    OwnerRoleImmutable,
+    UserNotFound,
+)
 from api.notifications.service import NotificationService
 from api.posts.schemas import PostCreate
 from api.posts.service import PostService
@@ -39,14 +54,12 @@ MANAGERS = {CommunityRole.OWNER, CommunityRole.ADMIN}
 
 @asynccontextmanager
 async def _handle_errors(session: AsyncSession, action: str):
+    """Roll back on any error; the global handlers turn it into the error response."""
     try:
         yield
-    except HTTPException:
+    except Exception:
         await session.rollback()
         raise
-    except Exception as e:
-        await session.rollback()
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Error {action}: {e}")
 
 
 class CommunityService:
@@ -57,13 +70,13 @@ class CommunityService:
     async def _require_role(self, community_id: UUID, user_id: UUID, session: AsyncSession, roles: set[CommunityRole]) -> CommunityMember:
         member = await get_membership(community_id, user_id, session)
         if not member or member.role not in roles:
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You do not have permission to do this")
+            raise OnlyOwnerAllowed() if roles == {CommunityRole.OWNER} else CommunityPermissionDenied()
         return member
 
     async def _ensure_name_available(self, name: str, session: AsyncSession) -> None:
         result = await session.execute(select(Community.id).where(func.lower(Community.name) == name.lower()))
         if result.first():
-            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Community name already taken")
+            raise CommunityNameTaken()
 
     async def _add_member(self, community: Community, user_id: UUID, session: AsyncSession, role: CommunityRole = CommunityRole.MEMBER) -> CommunityMember:
         member = CommunityMember(community_id=community.id, user_id=user_id, role=role)
@@ -148,7 +161,7 @@ class CommunityService:
         async with _handle_errors(session, "joining community"):
             community = await get_community_or_404(community_id, session)
             if await get_membership(community_id, user_id, session):
-                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="You are already a member of this community")
+                raise AlreadyCommunityMember("You are already a member of this community")
 
             if not community.is_private:
                 await self._add_member(community, user_id, session)
@@ -180,9 +193,9 @@ class CommunityService:
             community = await get_community_or_404(community_id, session)
             member = await get_membership(community_id, user_id, session)
             if not member:
-                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="You are not a member of this community")
+                raise NotCommunityMember("You are not a member of this community", "No action needed")
             if member.role == CommunityRole.OWNER:
-                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="The owner cannot leave; delete the community instead")
+                raise OwnerCannotLeave()
             await session.delete(member)
             community.members_count -= 1
             await session.commit()
@@ -209,9 +222,9 @@ class CommunityService:
             community = await get_community_or_404(community_id, session)
             await self._require_role(community_id, actor_id, session, MANAGERS)
             if not await session.get(User, target_id):
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+                raise UserNotFound()
             if await get_membership(community_id, target_id, session):
-                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="User is already a member")
+                raise AlreadyCommunityMember("This user is already a member of the community")
 
             member = await self._add_member(community, target_id, session)
             result = await session.execute(
@@ -235,11 +248,11 @@ class CommunityService:
             actor = await self._require_role(community_id, actor_id, session, MANAGERS)
             target = await get_membership(community_id, target_id, session)
             if not target:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Member not found")
+                raise CommunityMemberNotFound()
             if target.role == CommunityRole.OWNER:
-                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="The owner cannot be removed")
+                raise OwnerCannotBeRemoved()
             if target.role == CommunityRole.ADMIN and actor.role != CommunityRole.OWNER:
-                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only the owner can remove admins")
+                raise OnlyOwnerAllowed("Only the owner can remove admins")
             await session.delete(target)
             community.members_count -= 1
             await session.commit()
@@ -249,12 +262,12 @@ class CommunityService:
             await get_community_or_404(community_id, session)
             await self._require_role(community_id, actor_id, session, {CommunityRole.OWNER})
             if role == CommunityRole.OWNER:
-                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Role must be admin or member")
+                raise InvalidCommunityRole()
             target = await get_membership(community_id, target_id, session)
             if not target:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Member not found")
+                raise CommunityMemberNotFound()
             if target.role == CommunityRole.OWNER:
-                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="The owner's role cannot be changed")
+                raise OwnerRoleImmutable()
             promoted = role == CommunityRole.ADMIN and target.role != CommunityRole.ADMIN
             target.role = role
             await session.commit()
@@ -286,9 +299,9 @@ class CommunityService:
             await self._require_role(community_id, actor_id, session, MANAGERS)
             request = await session.get(CommunityJoinRequest, request_id)
             if not request or request.community_id != community_id:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Join request not found")
+                raise JoinRequestNotFound()
             if request.status != JoinRequestStatus.PENDING:
-                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Join request already reviewed")
+                raise JoinRequestAlreadyReviewed()
 
             if approve:
                 request.status = JoinRequestStatus.APPROVED
@@ -308,7 +321,7 @@ class CommunityService:
         async with _handle_errors(session, "creating community post"):
             await get_community_or_404(community_id, session)
             if not await get_membership(community_id, user_id, session):
-                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You must be a member of this community")
+                raise NotCommunityMember()
             data.author_id = str(user_id)
             return await self.post_service.create_post(data, session, community_id=community_id)
 
@@ -329,7 +342,7 @@ class CommunityService:
         async with _handle_errors(session, "deleting community post"):
             post = await session.get(Posts, post_id)
             if not post or post.community_id != community_id:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Post not found in this community")
+                raise CommunityPostNotFound()
             if post.author_id != user_id:
                 await self._require_role(community_id, user_id, session, MANAGERS)
             await self.post_service.delete_posts_with_dependents([post_id], session)
