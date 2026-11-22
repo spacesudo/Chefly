@@ -20,23 +20,27 @@ from pydantic import ValidationError
 from api.chat.schemas import MessageCreate
 from api.chat.service import ChatService
 from api.config import Config
-from api.db.redis import redis_client
-from api.errors import ChefLyException, InternalServerError, InvalidSocketMessage, InvalidToken, UnknownSocketMessage
+from api.db.redis import is_jwt_blacklisted, redis_client
+from api.errors import ChefLyException, InternalServerError, InvalidSocketMessage, InvalidToken, RevokedToken, UnknownSocketMessage
 from api.notifications.service import NotificationService
-from api.realtime.events import envelope, publish, user_channel
+from api.realtime.events import envelope, publish, revocation_channel, user_channel
 
 logger = logging.getLogger(__name__)
 
 chat_service = ChatService()
 notification_service = NotificationService()
 
+# Fallback for missed revocation pub/sub messages: how often an idle socket rechecks the blacklist
+SESSION_CHECK_INTERVAL = 30
+
 
 class RealtimeConnection:
 
-    def __init__(self, websocket: WebSocket, user_id: UUID, token_expires_at: float):
+    def __init__(self, websocket: WebSocket, user_id: UUID, token_expires_at: float, token_jti: str):
         self.websocket = websocket
         self.user_id = user_id
         self.token_expires_at = token_expires_at
+        self.token_jti = token_jti
         # conversation_id -> other participant, so typing events don't hit the DB every keystroke
         self.peers: dict[UUID, UUID] = {}
         self.handlers = {
@@ -51,9 +55,15 @@ class RealtimeConnection:
 
     async def run(self) -> None:
         pubsub = redis_client.pubsub()
-        await pubsub.subscribe(user_channel(self.user_id))
-        tasks = [asyncio.create_task(self._forward(pubsub)), asyncio.create_task(self._receive())]
+        await pubsub.subscribe(user_channel(self.user_id), revocation_channel(self.token_jti))
+        tasks = [
+            asyncio.create_task(self._forward(pubsub)),
+            asyncio.create_task(self._receive()),
+            asyncio.create_task(self._watch_session()),
+        ]
         try:
+            if await self._session_error():
+                return
             await self.send("ready", await self._ready_payload())
             done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
             for task in done:
@@ -64,7 +74,7 @@ class RealtimeConnection:
             for task in tasks:
                 task.cancel()
             await asyncio.gather(*tasks, return_exceptions=True)
-            await pubsub.unsubscribe(user_channel(self.user_id))
+            await pubsub.unsubscribe(user_channel(self.user_id), revocation_channel(self.token_jti))
             await pubsub.aclose()
 
     async def _ready_payload(self) -> dict:
@@ -75,17 +85,47 @@ class RealtimeConnection:
                 "chat": (await chat_service.unread_summary(self.user_id, session)).model_dump(),
             }
 
+    async def _session_error(self) -> ChefLyException | None:
+        """Close the socket and return the reason if its token has expired or been revoked."""
+        if datetime.now().timestamp() >= self.token_expires_at:
+            error = InvalidToken("Your token has expired", "Reconnect with a fresh access token")
+        elif await is_jwt_blacklisted(self.token_jti):
+            error = RevokedToken()
+        else:
+            return None
+        await self._close(error)
+        return error
+
+    async def _close(self, error: ChefLyException) -> None:
+        try:
+            await self._error({}, error)
+            await self.websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason=error.error_code)
+        except Exception:
+            pass
+
+    async def _watch_session(self) -> None:
+        """Close the socket as soon as the token expires, and periodically recheck revocation."""
+        while True:
+            remaining = self.token_expires_at - datetime.now().timestamp()
+            await asyncio.sleep(max(0, min(SESSION_CHECK_INTERVAL, remaining)))
+            if await self._session_error():
+                return
+
     async def _forward(self, pubsub) -> None:
         async for message in pubsub.listen():
-            if message["type"] == "message":
-                await self.websocket.send_text(message["data"])
+            if message["type"] != "message":
+                continue
+            if message["channel"] == revocation_channel(self.token_jti):
+                await self._close(RevokedToken())
+                return
+            if await self._session_error():
+                return
+            await self.websocket.send_text(message["data"])
 
     async def _receive(self) -> None:
         while True:
             raw = await self.websocket.receive_text()
-            if datetime.now().timestamp() >= self.token_expires_at:
-                await self._error({}, InvalidToken("Your token has expired", "Reconnect with a fresh access token"))
-                await self.websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+            if await self._session_error():
                 return
             msg: dict = {}
             try:

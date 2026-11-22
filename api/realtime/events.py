@@ -17,6 +17,10 @@ def user_channel(user_id: UUID) -> str:
     return f"events:{user_id}"
 
 
+def revocation_channel(jti: str) -> str:
+    return f"revoked:{jti}"
+
+
 def envelope(type: str, data: dict) -> str:
     return json.dumps({"type": type, "data": data}, default=str)
 
@@ -28,3 +32,11 @@ async def publish(user_ids: UUID | Iterable[UUID], type: str, data: dict) -> Non
             await redis_client.publish(user_channel(user_id), envelope(type, data))
         except Exception:
             logger.warning("Failed to publish %s event", type, exc_info=True)
+
+
+async def publish_revocation(jti: str) -> None:
+    """Tell open WebSockets authenticated with this token to close. Best-effort; sockets also poll the blacklist."""
+    try:
+        await redis_client.publish(revocation_channel(jti), "revoked")
+    except Exception:
+        logger.warning("Failed to publish token revocation", exc_info=True)
