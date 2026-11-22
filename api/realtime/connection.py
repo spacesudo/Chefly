@@ -36,11 +36,14 @@ SESSION_CHECK_INTERVAL = 30
 
 class RealtimeConnection:
 
-    def __init__(self, websocket: WebSocket, user_id: UUID, token_expires_at: float, token_jti: str):
+    def __init__(self, websocket: WebSocket, user_id: UUID, token_expires_at: float, token_jti: str, token_sid: str | None = None):
         self.websocket = websocket
         self.user_id = user_id
         self.token_expires_at = token_expires_at
         self.token_jti = token_jti
+        # Revoking either the token or its login session closes the socket
+        self.revocation_ids = [i for i in (token_jti, token_sid) if i]
+        self.revocation_channels = {revocation_channel(i) for i in self.revocation_ids}
         # conversation_id -> other participant, so typing events don't hit the DB every keystroke
         self.peers: dict[UUID, UUID] = {}
         self.handlers = {
@@ -55,7 +58,7 @@ class RealtimeConnection:
 
     async def run(self) -> None:
         pubsub = redis_client.pubsub()
-        await pubsub.subscribe(user_channel(self.user_id), revocation_channel(self.token_jti))
+        await pubsub.subscribe(user_channel(self.user_id), *self.revocation_channels)
         tasks = [
             asyncio.create_task(self._forward(pubsub)),
             asyncio.create_task(self._receive()),
@@ -74,7 +77,7 @@ class RealtimeConnection:
             for task in tasks:
                 task.cancel()
             await asyncio.gather(*tasks, return_exceptions=True)
-            await pubsub.unsubscribe(user_channel(self.user_id), revocation_channel(self.token_jti))
+            await pubsub.unsubscribe(user_channel(self.user_id), *self.revocation_channels)
             await pubsub.aclose()
 
     async def _ready_payload(self) -> dict:
@@ -89,7 +92,7 @@ class RealtimeConnection:
         """Close the socket and return the reason if its token has expired or been revoked."""
         if datetime.now().timestamp() >= self.token_expires_at:
             error = InvalidToken("Your token has expired", "Reconnect with a fresh access token")
-        elif await is_jwt_blacklisted(self.token_jti):
+        elif any([await is_jwt_blacklisted(i) for i in self.revocation_ids]):
             error = RevokedToken()
         else:
             return None
@@ -115,7 +118,7 @@ class RealtimeConnection:
         async for message in pubsub.listen():
             if message["type"] != "message":
                 continue
-            if message["channel"] == revocation_channel(self.token_jti):
+            if message["channel"] in self.revocation_channels:
                 await self._close(RevokedToken())
                 return
             if await self._session_error():

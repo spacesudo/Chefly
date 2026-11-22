@@ -20,7 +20,7 @@ def verify_password(password: str, hashed_password: str) -> bool:
     hashed_bytes = hashed_password.encode('utf-8')
     return bcrypt.checkpw(password_bytes, hashed_bytes)
 
-def create_access_token(user_data: dict, expiry: timedelta = None, refresh: bool = False) -> str:
+def create_access_token(user_data: dict, expiry: timedelta = None, refresh: bool = False, session_id: str = None) -> str:
     # Calculate expiry time
     if expiry is not None:
         exp_time = datetime.now() + expiry
@@ -33,6 +33,8 @@ def create_access_token(user_data: dict, expiry: timedelta = None, refresh: bool
         'jti': str(uuid.uuid4()),
         'refresh': refresh
     }
+    if session_id:
+        payload['sid'] = session_id
     token = jwt.encode(
         payload,
         key=Config.JWT_SECRET,
