@@ -7,7 +7,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 from .utils import decode_token, create_access_token, verify_password
 from api.config import Config
 from datetime import timedelta, datetime
-from .dependencies import RefreshTokenBearer, AccessTokenBearer
+from .dependencies import RefreshTokenBearer, AccessTokenBearer, refresh_session_id
 from api.db.redis import add_jwt_to_blacklist, claim_jwt_once, revoke_session
 from api.errors import InvalidCredentials, InvalidToken, RevokedToken, UserAlreadyExists, UserNotFound
 import uuid
@@ -82,7 +82,7 @@ async def refresh_token(token_details: dict = Depends(RefreshTokenBearer())):
     jti = token_details.get("jti")
     if not user_data or not jti:
         raise InvalidToken()
-    session_id = token_details.get("sid") or str(uuid.uuid4())
+    session_id = refresh_session_id(token_details)
     
     # Rotate: each refresh token can be used once. Reuse means it leaked, so end the whole session.
     if not await claim_jwt_once(jti, token_details.get("exp")):

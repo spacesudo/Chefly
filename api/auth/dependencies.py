@@ -27,6 +27,11 @@ async def is_token_revoked(token_data: dict) -> bool:
     return bool(sid) and await is_jwt_blacklisted(sid)
 
 
+def refresh_session_id(token_data: dict) -> str:
+    """Session a refresh token belongs to; tokens issued before `sid` existed get one derived from their jti."""
+    return token_data.get("sid") or f"legacy-{token_data.get('jti')}"
+
+
 def parse_uuid(value: str, label: str) -> UUID:
     try:
         return UUID(value)
@@ -91,9 +96,8 @@ class RefreshTokenBearer(TokenBearer):
         except RevokedToken:
             # A rotated-out refresh token being replayed means it leaked: end the whole session
             token_data = decode_token((await HTTPBearer.__call__(self, request)).credentials)
-            sid = token_data.get("sid") if token_data and token_data.get("refresh") else None
-            if sid:
-                await revoke_session(sid)
+            if token_data and token_data.get("refresh") and token_data.get("jti"):
+                await revoke_session(refresh_session_id(token_data))
             raise
 
     def verify_token_data(self, token_data: dict) -> None:
