@@ -9,6 +9,7 @@ from api.config import Config
 from datetime import timedelta, datetime
 from .dependencies import RefreshTokenBearer, AccessTokenBearer
 from api.db.redis import add_jwt_to_blacklist
+from api.realtime.events import publish_revocation
 from api.errors import InvalidCredentials, InvalidToken, UserAlreadyExists, UserNotFound
 
 
@@ -99,6 +100,7 @@ async def logout(token_details: dict = Depends(AccessTokenBearer())):
     if not jti:
         raise InvalidToken()
     await add_jwt_to_blacklist(jti)
+    await publish_revocation(jti)
     return JSONResponse(
         content={
         "message": "Logged out successfully"},

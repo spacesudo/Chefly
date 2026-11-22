@@ -2,7 +2,8 @@ from redis.asyncio import Redis
 from api.config import Config
 
 
-JTI_EXPIRY = 3600
+# Must outlive any token that can be revoked, or it becomes valid again once the entry expires
+JTI_EXPIRY = max(Config.JWT_ACCESS_EXPIRY, Config.JWT_REFRESH_EXPIRY)
 
 redis_client = Redis(
     host=Config.REDIS_HOST,
