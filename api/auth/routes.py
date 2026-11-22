@@ -10,6 +10,7 @@ from datetime import timedelta, datetime
 from .dependencies import RefreshTokenBearer, AccessTokenBearer, refresh_session_id
 from api.db.redis import add_jwt_to_blacklist, claim_jwt_once, revoke_session
 from api.errors import InvalidCredentials, InvalidToken, RevokedToken, UserAlreadyExists, UserNotFound
+from api.realtime.events import publish_revocation
 import uuid
 
 
@@ -87,6 +88,7 @@ async def refresh_token(token_details: dict = Depends(RefreshTokenBearer())):
     # Rotate: each refresh token can be used once. Reuse means it leaked, so end the whole session.
     if not await claim_jwt_once(jti, token_details.get("exp")):
         await revoke_session(session_id)
+        await publish_revocation(session_id)
         raise RevokedToken()
     
     access_token, refresh_token = issue_token_pair(
@@ -116,6 +118,8 @@ async def logout(token_details: dict = Depends(AccessTokenBearer())):
     if session_id:
         # Revokes the refresh token and every other token issued in this login session
         await revoke_session(session_id)
+        await publish_revocation(session_id)
+    await publish_revocation(jti)
     return JSONResponse(
         content={
         "message": "Logged out successfully"},

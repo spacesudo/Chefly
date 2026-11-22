@@ -21,4 +21,4 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = None):
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason=e.error_code)
         return
     await websocket.accept()
-    await RealtimeConnection(websocket, user_id, token_data["exp"]).run()
+    await RealtimeConnection(websocket, user_id, token_data["exp"], token_data["jti"], token_data.get("sid")).run()

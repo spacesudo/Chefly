@@ -6,6 +6,7 @@ from .utils import decode_token
 from datetime import datetime
 from uuid import UUID
 from api.db.redis import is_jwt_blacklisted, revoke_session
+from api.realtime.events import publish_revocation
 from api.errors import AccessTokenRequired, InvalidId, InvalidToken, NotAuthenticated, RefreshTokenRequired, RevokedToken
 
 
@@ -97,7 +98,9 @@ class RefreshTokenBearer(TokenBearer):
             # A rotated-out refresh token being replayed means it leaked: end the whole session
             token_data = decode_token((await HTTPBearer.__call__(self, request)).credentials)
             if token_data and token_data.get("refresh") and token_data.get("jti"):
-                await revoke_session(refresh_session_id(token_data))
+                session_id = refresh_session_id(token_data)
+                await revoke_session(session_id)
+                await publish_revocation(session_id)
             raise
 
     def verify_token_data(self, token_data: dict) -> None:
