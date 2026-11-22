@@ -5,7 +5,7 @@ from fastapi.security.http import HTTPAuthorizationCredentials
 from .utils import decode_token
 from datetime import datetime
 from uuid import UUID
-from api.db.redis import add_jwt_to_blacklist, is_jwt_blacklisted
+from api.db.redis import is_jwt_blacklisted, revoke_session
 from api.errors import AccessTokenRequired, InvalidId, InvalidToken, NotAuthenticated, RefreshTokenRequired, RevokedToken
 
 
@@ -17,6 +17,14 @@ def get_current_user_id(token_details: dict) -> UUID:
         return UUID(user_id_str)
     except (ValueError, TypeError):
         raise InvalidToken()
+
+
+async def is_token_revoked(token_data: dict) -> bool:
+    jti = token_data.get("jti")
+    if not jti or await is_jwt_blacklisted(jti):
+        return True
+    sid = token_data.get("sid")
+    return bool(sid) and await is_jwt_blacklisted(sid)
 
 
 def parse_uuid(value: str, label: str) -> UUID:
@@ -36,10 +44,10 @@ class TokenBearer(HTTPBearer):
         
         token_data = decode_token(token)
         
-        if not self.token_valid(token):
+        if token_data is None:
             raise InvalidToken()
         
-        if await is_jwt_blacklisted(token_data.get("jti")):
+        if await is_token_revoked(token_data):
             raise RevokedToken()
         
         self.verify_token_data(token_data)
@@ -70,13 +78,24 @@ async def authenticate_access_token(token: Optional[str]) -> dict:
     token_data = decode_token(token)
     if token_data is None:
         raise InvalidToken()
-    if await is_jwt_blacklisted(token_data.get("jti")):
+    if await is_token_revoked(token_data):
         raise RevokedToken()
     AccessTokenBearer().verify_token_data(token_data)
     return token_data
 
 
 class RefreshTokenBearer(TokenBearer):
+    async def __call__(self, request: Request) -> Optional[HTTPAuthorizationCredentials  | None]:
+        try:
+            return await super().__call__(request)
+        except RevokedToken:
+            # A rotated-out refresh token being replayed means it leaked: end the whole session
+            token_data = decode_token((await HTTPBearer.__call__(self, request)).credentials)
+            sid = token_data.get("sid") if token_data and token_data.get("refresh") else None
+            if sid:
+                await revoke_session(sid)
+            raise
+
     def verify_token_data(self, token_data: dict) -> None:
         if token_data and not token_data.get("refresh"):
             raise RefreshTokenRequired()

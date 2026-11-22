@@ -113,8 +113,8 @@ Once the server is running, access the interactive API documentation:
 ### Authentication (`/auth`)
 - `POST /auth/signup` - Register a new user
 - `POST /auth/login` - Login and get access/refresh tokens
-- `POST /auth/refresh` - Refresh access token
-- `POST /auth/logout` - Logout (blacklist token)
+- `POST /auth/refresh` - Exchange a refresh token for a new access token and a new refresh token (the old refresh token stops working)
+- `POST /auth/logout` - Logout (revokes the access token, its refresh token and every token from the same login)
 
 ### Posts (`/posts`)
 - `POST /posts/create` - Create a new post (authenticated). Body: `title`, `content`, `tags` (e.g. `["#Meal Prep", "vegan"]`)
@@ -380,8 +380,8 @@ Interaction recording is best-effort: if Redis is unavailable, the API request s
 1. **Signup**: User registers with email, username, and password
 2. **Login**: User receives access token (short-lived) and refresh token (long-lived)
 3. **API Requests**: Include access token in Authorization header: `Bearer <token>`
-4. **Token Refresh**: Use refresh token to get new access token when expired
-5. **Logout**: Token is blacklisted in Redis
+4. **Token Refresh**: Use refresh token to get a new access/refresh token pair when expired; each refresh token is single-use, and reusing one revokes the whole session
+5. **Logout**: The access token and its login session are blacklisted in Redis until the tokens expire
 
 ## Project Structure
 
